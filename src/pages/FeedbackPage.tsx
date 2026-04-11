@@ -5,9 +5,10 @@ import FeedbackForm from "@/components/FeedbackForm";
 
 const FeedbackPage = () => {
   const [searchParams] = useSearchParams();
-  const sessionId = searchParams.get("session");
+  const instructor = searchParams.get("instructor");
+  const date = searchParams.get("date");
 
-  if (!sessionId) {
+  if (!instructor || !date) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-background">
         <motion.div
@@ -25,6 +26,8 @@ const FeedbackPage = () => {
     );
   }
 
+  const sessionId = `${instructor.toLowerCase().replace(/\s+/g, "-")}_${date}`;
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <motion.div
@@ -40,7 +43,9 @@ const FeedbackPage = () => {
           <div>
             <h1 className="text-lg font-bold text-foreground leading-tight">Session Feedback</h1>
             <p className="text-xs text-muted-foreground">
-              Session: <span className="font-medium text-foreground/70">{sessionId}</span>
+              Instructor: <span className="font-medium text-foreground/70">{instructor}</span>
+              {" · "}
+              {date}
             </p>
           </div>
         </div>
