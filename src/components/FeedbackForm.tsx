@@ -12,6 +12,7 @@ import {
   recordSubmission,
   type FeedbackData,
 } from "@/lib/feedbackValidation";
+import { saveFeedback } from "@/lib/feedbackStore";
 
 interface FeedbackFormProps {
   sessionId: string;
@@ -55,7 +56,6 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
 
     setLoading(true);
 
-    // Simulate API call (replace with Supabase insert when connected)
     const feedbackData: FeedbackData = {
       timestamp: new Date().toISOString(),
       student_id: trimmedId,
@@ -67,10 +67,8 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
     };
 
     try {
-      // TODO: Replace with supabase.from('feedback').insert(feedbackData)
-      console.log("Feedback submitted:", feedbackData);
-      await new Promise((r) => setTimeout(r, 1200));
-
+      await new Promise((r) => setTimeout(r, 800));
+      saveFeedback(feedbackData);
       recordSubmission(trimmedId, sessionId);
       setSuccess(true);
     } catch {

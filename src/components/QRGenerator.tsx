@@ -6,17 +6,22 @@ import { Button } from "@/components/ui/button";
 import { QrCode, Copy, Check } from "lucide-react";
 
 const QRGenerator = () => {
-  const [sessionId, setSessionId] = useState("");
-  const [generated, setGenerated] = useState("");
+  const [instructorName, setInstructorName] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [generated, setGenerated] = useState<{ instructor: string; date: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const feedbackUrl = generated
-    ? `${window.location.origin}/feedback?session=${encodeURIComponent(generated)}`
+  const sessionId = generated
+    ? `${generated.instructor.trim().toLowerCase().replace(/\s+/g, "-")}_${generated.date}`
+    : "";
+
+  const feedbackUrl = sessionId
+    ? `${window.location.origin}/feedback?instructor=${encodeURIComponent(generated!.instructor.trim())}&date=${generated!.date}`
     : "";
 
   const handleGenerate = () => {
-    if (sessionId.trim()) {
-      setGenerated(sessionId.trim().toLowerCase().replace(/\s+/g, "-"));
+    if (instructorName.trim() && date) {
+      setGenerated({ instructor: instructorName.trim(), date });
     }
   };
 
@@ -37,17 +42,28 @@ const QRGenerator = () => {
         <p className="text-sm text-muted-foreground">Create a QR code for students to scan</p>
       </div>
 
-      <div className="flex gap-2">
-        <Input
-          placeholder="e.g. react-day-3"
-          value={sessionId}
-          onChange={(e) => setSessionId(e.target.value)}
-          className="bg-secondary/50 border-border/60 text-base"
-          onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
-        />
-        <Button onClick={handleGenerate} disabled={!sessionId.trim()} className="shrink-0">
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <label className="text-sm font-semibold text-foreground">Instructor Name</label>
+          <Input
+            placeholder="e.g. John Smith"
+            value={instructorName}
+            onChange={(e) => setInstructorName(e.target.value)}
+            className="bg-secondary/50 border-border/60 text-base"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-semibold text-foreground">Date</label>
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="bg-secondary/50 border-border/60 text-base"
+          />
+        </div>
+        <Button onClick={handleGenerate} disabled={!instructorName.trim() || !date} className="w-full">
           <QrCode className="w-4 h-4 mr-1.5" />
-          Generate
+          Generate QR Code
         </Button>
       </div>
 
@@ -62,7 +78,9 @@ const QRGenerator = () => {
           </div>
           <div className="w-full space-y-2">
             <p className="text-xs text-muted-foreground text-center font-medium">
-              Session: <span className="text-foreground">{generated}</span>
+              Instructor: <span className="text-foreground">{generated.instructor}</span>
+              {" · "}
+              Date: <span className="text-foreground">{generated.date}</span>
             </p>
             <Button
               variant="outline"
