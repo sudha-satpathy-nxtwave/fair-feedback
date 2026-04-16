@@ -50,6 +50,81 @@ export type Database = {
         }
         Relationships: []
       }
+      daily_attendance: {
+        Row: {
+          created_at: string
+          date: string
+          id: string
+          instructor_id: string
+          status: string
+          student_id: string
+        }
+        Insert: {
+          created_at?: string
+          date?: string
+          id?: string
+          instructor_id: string
+          status?: string
+          student_id: string
+        }
+        Update: {
+          created_at?: string
+          date?: string
+          id?: string
+          instructor_id?: string
+          status?: string
+          student_id?: string
+        }
+        Relationships: []
+      }
+      session_codes: {
+        Row: {
+          active_date: string
+          code: string
+          created_at: string
+          id: string
+          instructor_id: string
+        }
+        Insert: {
+          active_date?: string
+          code: string
+          created_at?: string
+          id?: string
+          instructor_id: string
+        }
+        Update: {
+          active_date?: string
+          code?: string
+          created_at?: string
+          id?: string
+          instructor_id?: string
+        }
+        Relationships: []
+      }
+      students_master: {
+        Row: {
+          class_group: string
+          created_at: string
+          id: string
+          name: string
+          student_id: string
+        }
+        Insert: {
+          class_group?: string
+          created_at?: string
+          id?: string
+          name?: string
+          student_id: string
+        }
+        Update: {
+          class_group?: string
+          created_at?: string
+          id?: string
+          name?: string
+          student_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
