@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Download, Flame, Users, MessageSquare } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -12,33 +12,84 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getAllFeedback, getStudentStreaks, exportToExcel } from "@/lib/feedbackStore";
+import { supabase } from "@/integrations/supabase/client";
+import { exportToExcel } from "@/lib/feedbackStore";
+
+interface FeedbackRow {
+  id: string;
+  student_id: string;
+  session_id: string;
+  understanding_rating: number;
+  instructor_rating: number;
+  description: string;
+  ai_score: number | null;
+  attendance_marked: boolean;
+  created_at: string;
+}
+
+interface StreakInfo {
+  student_id: string;
+  totalSessions: number;
+  currentStreak: number;
+  dates: string[];
+}
+
+function computeStreaks(feedbacks: FeedbackRow[], instructor: string): StreakInfo[] {
+  const filtered = feedbacks.filter((f) =>
+    f.session_id.startsWith(instructor.toLowerCase())
+  );
+  const studentMap = new Map<string, Set<string>>();
+  for (const fb of filtered) {
+    if (!fb.attendance_marked) continue;
+    const dateStr = fb.session_id.split("_").slice(1).join("_");
+    if (!studentMap.has(fb.student_id)) studentMap.set(fb.student_id, new Set());
+    studentMap.get(fb.student_id)!.add(dateStr);
+  }
+  const allDates = [...new Set(filtered.map((f) => f.session_id.split("_").slice(1).join("_")))].sort();
+  const streaks: StreakInfo[] = [];
+  for (const [studentId, dates] of studentMap) {
+    let currentStreak = 0;
+    for (let i = allDates.length - 1; i >= 0; i--) {
+      if (dates.has(allDates[i])) currentStreak++;
+      else break;
+    }
+    streaks.push({ student_id: studentId, totalSessions: dates.size, currentStreak, dates: [...dates].sort() });
+  }
+  return streaks.sort((a, b) => b.currentStreak - a.currentStreak);
+}
 
 const Dashboard = () => {
   const [instructorFilter, setInstructorFilter] = useState("");
+  const [allFeedback, setAllFeedback] = useState<FeedbackRow[]>([]);
+  const [dbLoading, setDbLoading] = useState(true);
 
-  const allFeedback = useMemo(() => getAllFeedback(), []);
+  useEffect(() => {
+    const fetchData = async () => {
+      const { data, error } = await supabase
+        .from("attendance_feedback")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) setAllFeedback(data as FeedbackRow[]);
+      setDbLoading(false);
+    };
+    fetchData();
+  }, []);
 
   const instructors = useMemo(() => {
-    const set = new Set(
-      allFeedback.map((f) => f.session_id.split("_")[0])
-    );
+    const set = new Set(allFeedback.map((f) => f.session_id.split("_")[0]));
     return [...set];
   }, [allFeedback]);
 
   const activeInstructor = instructorFilter || instructors[0] || "";
 
   const filteredFeedback = useMemo(
-    () =>
-      allFeedback.filter((f) =>
-        activeInstructor ? f.session_id.startsWith(activeInstructor) : true
-      ),
+    () => allFeedback.filter((f) => (activeInstructor ? f.session_id.startsWith(activeInstructor) : true)),
     [allFeedback, activeInstructor]
   );
 
   const streaks = useMemo(
-    () => (activeInstructor ? getStudentStreaks(activeInstructor) : []),
-    [activeInstructor]
+    () => (activeInstructor ? computeStreaks(allFeedback, activeInstructor) : []),
+    [allFeedback, activeInstructor]
   );
 
   return (
@@ -49,7 +100,6 @@ const Dashboard = () => {
         transition={{ duration: 0.5 }}
         className="max-w-5xl mx-auto space-y-6"
       >
-        {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -70,7 +120,6 @@ const Dashboard = () => {
           </Button>
         </div>
 
-        {/* Instructor filter */}
         <div className="space-y-1.5">
           <label className="text-sm font-semibold text-foreground">Filter by Instructor</label>
           <Input
@@ -81,21 +130,13 @@ const Dashboard = () => {
           />
         </div>
 
-        {/* Stats */}
         <div className="grid grid-cols-3 gap-3">
           {[
             { icon: MessageSquare, label: "Responses", value: filteredFeedback.length },
             { icon: Users, label: "Students", value: streaks.length },
-            {
-              icon: Flame,
-              label: "Best Streak",
-              value: streaks.length ? streaks[0].currentStreak : 0,
-            },
+            { icon: Flame, label: "Best Streak", value: streaks.length ? streaks[0].currentStreak : 0 },
           ].map(({ icon: Icon, label, value }) => (
-            <div
-              key={label}
-              className="bg-card border border-border rounded-xl p-4 text-center space-y-1"
-            >
+            <div key={label} className="bg-card border border-border rounded-xl p-4 text-center space-y-1">
               <Icon className="w-5 h-5 text-primary mx-auto" />
               <p className="text-2xl font-bold text-foreground">{value}</p>
               <p className="text-xs text-muted-foreground">{label}</p>
@@ -103,7 +144,6 @@ const Dashboard = () => {
           ))}
         </div>
 
-        {/* Tabs */}
         <Tabs defaultValue="responses" className="space-y-4">
           <TabsList>
             <TabsTrigger value="responses">Responses</TabsTrigger>
@@ -111,7 +151,9 @@ const Dashboard = () => {
           </TabsList>
 
           <TabsContent value="responses">
-            {filteredFeedback.length === 0 ? (
+            {dbLoading ? (
+              <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
+            ) : filteredFeedback.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-12">
                 No feedback yet. Share the QR code with students to start collecting responses.
               </p>
@@ -125,6 +167,7 @@ const Dashboard = () => {
                       <TableHead className="text-center">Understanding</TableHead>
                       <TableHead className="text-center">Instructor</TableHead>
                       <TableHead>Description</TableHead>
+                      <TableHead className="text-center">AI Score</TableHead>
                       <TableHead className="text-center">Attendance</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -133,12 +176,15 @@ const Dashboard = () => {
                       <TableRow key={fb.id}>
                         <TableCell className="font-medium">{fb.student_id}</TableCell>
                         <TableCell className="text-muted-foreground text-xs">
-                          {new Date(fb.timestamp).toLocaleDateString()}
+                          {new Date(fb.created_at).toLocaleDateString()}
                         </TableCell>
                         <TableCell className="text-center">{fb.understanding_rating}⭐</TableCell>
                         <TableCell className="text-center">{fb.instructor_rating}⭐</TableCell>
-                        <TableCell className="max-w-[200px] truncate text-xs">
-                          {fb.description}
+                        <TableCell className="max-w-[200px] truncate text-xs">{fb.description}</TableCell>
+                        <TableCell className="text-center">
+                          <span className={`text-xs font-medium ${(fb.ai_score ?? 0) >= 75 ? "text-green-500" : "text-amber-500"}`}>
+                            {fb.ai_score ?? "—"}
+                          </span>
                         </TableCell>
                         <TableCell className="text-center">
                           {fb.attendance_marked ? (
@@ -157,9 +203,7 @@ const Dashboard = () => {
 
           <TabsContent value="streaks">
             {streaks.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-12">
-                No attendance data yet.
-              </p>
+              <p className="text-sm text-muted-foreground text-center py-12">No attendance data yet.</p>
             ) : (
               <div className="border border-border rounded-xl overflow-hidden">
                 <Table>
