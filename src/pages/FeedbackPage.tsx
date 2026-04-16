@@ -1,12 +1,15 @@
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { BookOpen, AlertTriangle } from "lucide-react";
 import FeedbackForm from "@/components/FeedbackForm";
+import SessionCodeGate from "@/components/SessionCodeGate";
 
 const FeedbackPage = () => {
   const [searchParams] = useSearchParams();
   const instructor = searchParams.get("instructor");
   const date = searchParams.get("date");
+  const [unlocked, setUnlocked] = useState(false);
 
   if (!instructor || !date) {
     return (
@@ -26,7 +29,8 @@ const FeedbackPage = () => {
     );
   }
 
-  const sessionId = `${instructor.toLowerCase().replace(/\s+/g, "-")}_${date}`;
+  const instructorId = instructor.toLowerCase().replace(/\s+/g, "-");
+  const sessionId = `${instructorId}_${date}`;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
@@ -44,12 +48,16 @@ const FeedbackPage = () => {
             <h1 className="text-lg font-bold text-foreground leading-tight">Session Feedback</h1>
             <p className="text-xs text-muted-foreground">
               Instructor: <span className="font-medium text-foreground/70">{instructor}</span>
-              {" · "}
-              {date}
+              {" · "}{date}
             </p>
           </div>
         </div>
-        <FeedbackForm sessionId={sessionId} />
+
+        {!unlocked ? (
+          <SessionCodeGate instructorId={instructorId} onVerified={() => setUnlocked(true)} />
+        ) : (
+          <FeedbackForm sessionId={sessionId} />
+        )}
       </motion.div>
     </div>
   );

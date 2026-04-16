@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, AlertCircle, Sparkles, RefreshCw } from "lucide-react";
+import { Loader2, AlertCircle, Sparkles, RefreshCw, Lightbulb, Search } from "lucide-react";
 import StarRating from "./StarRating";
 import SuccessAnimation from "./SuccessAnimation";
 import { Button } from "@/components/ui/button";
@@ -34,11 +34,10 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
 
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const runAiValidation = useCallback(
     async (text: string, uRating: number, iRating: number) => {
-      if (!text.trim() || text.trim().length < 20 || uRating === 0 || iRating === 0) {
+      if (!text.trim() || uRating === 0 || iRating === 0) {
         setAiResult(null);
         return;
       }
@@ -57,7 +56,6 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
         setAiResult(data as AiResult);
       } catch (err) {
         console.error("AI validation error:", err);
-        // Don't block on AI failure — allow submission
         setAiResult({ score: 80, is_valid: true, suggestion: "" });
       } finally {
         setAiLoading(false);
@@ -65,32 +63,6 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
     },
     []
   );
-
-  const handleDescriptionChange = (value: string) => {
-    setDescription(value);
-    setAiResult(null);
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      runAiValidation(value, understandingRating, instructorRating);
-    }, 1200);
-  };
-
-  const handleRatingChange = (type: "understanding" | "instructor", val: number) => {
-    if (type === "understanding") setUnderstandingRating(val);
-    else setInstructorRating(val);
-
-    const uR = type === "understanding" ? val : understandingRating;
-    const iR = type === "instructor" ? val : instructorRating;
-
-    setAiResult(null);
-    if (description.trim().length >= 20) {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        runAiValidation(description, uR, iR);
-      }, 800);
-    }
-  };
 
   const bothFive = understandingRating === 5 && instructorRating === 5;
   const aiPassed = bothFive || (aiResult?.is_valid === true);
@@ -108,46 +80,47 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
 
     const trimmedId = studentId.trim().toUpperCase();
 
-    if (!trimmedId) {
-      setError("Student ID is required.");
-      return;
-    }
-
-    if (understandingRating === 0 || instructorRating === 0) {
-      setError("Please provide both ratings.");
-      return;
-    }
-
-    if (hasAlreadySubmitted(trimmedId, sessionId)) {
-      setError("Attendance already marked for this session.");
-      return;
-    }
+    if (!trimmedId) { setError("Student ID is required."); return; }
+    if (understandingRating === 0 || instructorRating === 0) { setError("Please provide both ratings."); return; }
+    if (hasAlreadySubmitted(trimmedId, sessionId)) { setError("Attendance already marked for this session."); return; }
 
     const validation = validateFeedback(understandingRating, instructorRating, description);
-    if (!validation.valid) {
-      setError(validation.error!);
-      return;
-    }
-
-    if (!bothFive && !aiPassed) {
-      setError("Your feedback needs improvement. Please review the AI suggestion below.");
-      return;
-    }
+    if (!validation.valid) { setError(validation.error!); return; }
+    if (!bothFive && !aiPassed) { setError("Your feedback needs improvement. Use 'Analyze My Feedback' to check your score."); return; }
 
     setLoading(true);
 
     try {
+      const finalScore = aiResult?.score ?? 0;
+
+      // Insert feedback
       const { error: dbError } = await supabase.from("attendance_feedback").insert({
         student_id: trimmedId,
         session_id: sessionId,
         understanding_rating: understandingRating,
         instructor_rating: instructorRating,
         description: description.trim() || "NA",
-        ai_score: aiResult?.score ?? 0,
+        ai_score: finalScore,
         attendance_marked: true,
       });
-
       if (dbError) throw dbError;
+
+      // Auto-mark attendance if AI score >= 75
+      if (finalScore >= 75 || bothFive) {
+        const instructorId = sessionId.split("_")[0];
+        const today = new Date().toISOString().split("T")[0];
+
+        await supabase.from("daily_attendance").upsert(
+          { student_id: trimmedId, date: today, status: "Present", instructor_id: instructorId },
+          { onConflict: "student_id,date,instructor_id" }
+        );
+
+        // Ensure student exists in master roster
+        await supabase.from("students_master").upsert(
+          { student_id: trimmedId },
+          { onConflict: "student_id" }
+        );
+      }
 
       recordSubmission(trimmedId, sessionId);
       setSuccess(true);
@@ -158,9 +131,7 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
     }
   };
 
-  if (success) {
-    return <SuccessAnimation />;
-  }
+  if (success) return <SuccessAnimation />;
 
   return (
     <motion.form
@@ -171,9 +142,7 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
       className="space-y-6"
     >
       <div className="space-y-1.5">
-        <label htmlFor="studentId" className="text-sm font-semibold text-foreground">
-          Student ID
-        </label>
+        <label htmlFor="studentId" className="text-sm font-semibold text-foreground">Student ID</label>
         <Input
           id="studentId"
           placeholder="Enter your Student ID"
@@ -186,48 +155,64 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
 
       <StarRating
         value={understandingRating}
-        onChange={(v) => handleRatingChange("understanding", v)}
+        onChange={setUnderstandingRating}
         label="Rate your understanding of today's session"
       />
 
       <StarRating
         value={instructorRating}
-        onChange={(v) => handleRatingChange("instructor", v)}
+        onChange={setInstructorRating}
         label="Rate your instructor's teaching today"
       />
 
       <div className="space-y-1.5">
         <label htmlFor="description" className="text-sm font-semibold text-foreground">
           What do you need more to learn better?
-          {bothFive && (
-            <span className="text-muted-foreground font-normal ml-1">(optional)</span>
-          )}
+          {bothFive && <span className="text-muted-foreground font-normal ml-1">(optional)</span>}
         </label>
         <Textarea
           id="description"
           placeholder="Share your thoughts on what could help you learn better..."
           value={description}
-          onChange={(e) => handleDescriptionChange(e.target.value)}
+          onChange={(e) => { setDescription(e.target.value); setAiResult(null); }}
           rows={4}
           className="bg-secondary/50 border-border/60 focus:border-primary text-base resize-none"
         />
       </div>
 
-      {/* AI Validation Status */}
-      <AnimatePresence mode="wait">
-        {aiLoading && (
-          <motion.div
-            key="ai-loading"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex items-center gap-2.5 p-3.5 rounded-lg bg-primary/5 border border-primary/20"
-          >
-            <Sparkles className="w-4 h-4 text-primary animate-pulse" />
-            <p className="text-sm text-primary font-medium">AI is analyzing your feedback...</p>
-          </motion.div>
-        )}
+      {/* Live Tips */}
+      <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 border border-border/40">
+        <Lightbulb className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+        <p className="text-xs text-muted-foreground">
+          <span className="font-semibold text-foreground/70">Tips:</span> Be respectful, focus on subject/delivery, and provide solutions.
+        </p>
+      </div>
 
+      {/* Manual Analyze Button */}
+      {!bothFive && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full gap-2"
+          disabled={aiLoading || !description.trim() || understandingRating === 0 || instructorRating === 0}
+          onClick={() => runAiValidation(description, understandingRating, instructorRating)}
+        >
+          {aiLoading ? (
+            <>
+              <Sparkles className="w-4 h-4 animate-pulse" />
+              Analyzing...
+            </>
+          ) : (
+            <>
+              <Search className="w-4 h-4" />
+              Analyze My Feedback
+            </>
+          )}
+        </Button>
+      )}
+
+      {/* AI Result */}
+      <AnimatePresence mode="wait">
         {!aiLoading && aiResult && (
           <motion.div
             key="ai-result"
@@ -235,27 +220,17 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             className={`p-4 rounded-lg border space-y-3 ${
-              aiResult.is_valid
-                ? "bg-green-500/5 border-green-500/20"
-                : "bg-amber-500/5 border-amber-500/20"
+              aiResult.is_valid ? "bg-green-500/5 border-green-500/20" : "bg-amber-500/5 border-amber-500/20"
             }`}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Sparkles
-                  className={`w-4 h-4 ${aiResult.is_valid ? "text-green-500" : "text-amber-500"}`}
-                />
-                <span className="text-sm font-semibold text-foreground">
-                  AI Score: {aiResult.score}/100
-                </span>
+                <Sparkles className={`w-4 h-4 ${aiResult.is_valid ? "text-green-500" : "text-amber-500"}`} />
+                <span className="text-sm font-semibold text-foreground">AI Score: {aiResult.score}/100</span>
               </div>
-              <span
-                className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  aiResult.is_valid
-                    ? "bg-green-500/10 text-green-600"
-                    : "bg-amber-500/10 text-amber-600"
-                }`}
-              >
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                aiResult.is_valid ? "bg-green-500/10 text-green-600" : "bg-amber-500/10 text-amber-600"
+              }`}>
                 {aiResult.is_valid ? "Valid" : "Needs Improvement"}
               </span>
             </div>
@@ -285,6 +260,7 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
         )}
       </AnimatePresence>
 
+      {/* Error */}
       <AnimatePresence mode="wait">
         {error && (
           <motion.div
@@ -308,11 +284,6 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
           <span className="flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
             Submitting...
-          </span>
-        ) : aiLoading ? (
-          <span className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 animate-pulse" />
-            Waiting for AI...
           </span>
         ) : (
           "Submit Feedback"

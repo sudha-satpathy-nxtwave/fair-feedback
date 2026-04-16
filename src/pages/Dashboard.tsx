@@ -1,19 +1,16 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Download, Flame, Users, MessageSquare } from "lucide-react";
+import { BookOpen, Download, Flame, Users, MessageSquare, KeyRound, CheckCircle2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { exportToExcel } from "@/lib/feedbackStore";
+import SessionCodeAdmin from "@/components/SessionCodeAdmin";
+import LiveAttendanceTable from "@/components/LiveAttendanceTable";
 
 interface FeedbackRow {
   id: string;
@@ -35,9 +32,7 @@ interface StreakInfo {
 }
 
 function computeStreaks(feedbacks: FeedbackRow[], instructor: string): StreakInfo[] {
-  const filtered = feedbacks.filter((f) =>
-    f.session_id.startsWith(instructor.toLowerCase())
-  );
+  const filtered = feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()));
   const studentMap = new Map<string, Set<string>>();
   for (const fb of filtered) {
     if (!fb.attendance_marked) continue;
@@ -87,6 +82,17 @@ const Dashboard = () => {
     [allFeedback, activeInstructor]
   );
 
+  // Group feedback by instructor for state separation
+  const feedbackByInstructor = useMemo(() => {
+    const map = new Map<string, FeedbackRow[]>();
+    for (const fb of allFeedback) {
+      const inst = fb.session_id.split("_")[0];
+      if (!map.has(inst)) map.set(inst, []);
+      map.get(inst)!.push(fb);
+    }
+    return map;
+  }, [allFeedback]);
+
   const streaks = useMemo(
     () => (activeInstructor ? computeStreaks(allFeedback, activeInstructor) : []),
     [allFeedback, activeInstructor]
@@ -107,14 +113,10 @@ const Dashboard = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground">Instructor Dashboard</h1>
-              <p className="text-xs text-muted-foreground">View feedback responses & attendance</p>
+              <p className="text-xs text-muted-foreground">View feedback, attendance & manage session codes</p>
             </div>
           </div>
-          <Button
-            onClick={() => exportToExcel(activeInstructor)}
-            disabled={!filteredFeedback.length}
-            size="sm"
-          >
+          <Button onClick={() => exportToExcel(activeInstructor)} disabled={!filteredFeedback.length} size="sm">
             <Download className="w-4 h-4 mr-1.5" />
             Export Excel
           </Button>
@@ -128,6 +130,23 @@ const Dashboard = () => {
             onChange={(e) => setInstructorFilter(e.target.value.toLowerCase().replace(/\s+/g, "-"))}
             className="bg-secondary/50 border-border/60 max-w-xs"
           />
+          {instructors.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {instructors.map((inst) => (
+                <button
+                  key={inst}
+                  onClick={() => setInstructorFilter(inst)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    activeInstructor === inst
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-secondary/50 text-muted-foreground border-border/60 hover:bg-secondary"
+                  }`}
+                >
+                  {inst}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-3">
@@ -147,16 +166,19 @@ const Dashboard = () => {
         <Tabs defaultValue="responses" className="space-y-4">
           <TabsList>
             <TabsTrigger value="responses">Responses</TabsTrigger>
-            <TabsTrigger value="streaks">Attendance Streaks</TabsTrigger>
+            <TabsTrigger value="attendance">Live Attendance</TabsTrigger>
+            <TabsTrigger value="streaks">Streaks</TabsTrigger>
+            <TabsTrigger value="admin">
+              <KeyRound className="w-3.5 h-3.5 mr-1" />
+              Admin
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="responses">
             {dbLoading ? (
               <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
             ) : filteredFeedback.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-12">
-                No feedback yet. Share the QR code with students to start collecting responses.
-              </p>
+              <p className="text-sm text-muted-foreground text-center py-12">No feedback yet.</p>
             ) : (
               <div className="border border-border rounded-xl overflow-hidden">
                 <Table>
@@ -188,7 +210,7 @@ const Dashboard = () => {
                         </TableCell>
                         <TableCell className="text-center">
                           {fb.attendance_marked ? (
-                            <span className="text-xs font-medium text-green-500">✓</span>
+                            <CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" />
                           ) : (
                             <span className="text-xs text-destructive">✗</span>
                           )}
@@ -199,6 +221,10 @@ const Dashboard = () => {
                 </Table>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="attendance">
+            <LiveAttendanceTable instructorId={activeInstructor} />
           </TabsContent>
 
           <TabsContent value="streaks">
@@ -235,6 +261,10 @@ const Dashboard = () => {
                 </Table>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="admin">
+            <SessionCodeAdmin instructorId={activeInstructor} />
           </TabsContent>
         </Tabs>
       </motion.div>
