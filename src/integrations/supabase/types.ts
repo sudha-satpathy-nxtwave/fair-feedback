@@ -14,7 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      attendance_feedback: {
+        Row: {
+          ai_score: number | null
+          attendance_marked: boolean
+          created_at: string
+          description: string
+          id: string
+          instructor_rating: number
+          session_id: string
+          student_id: string
+          understanding_rating: number
+        }
+        Insert: {
+          ai_score?: number | null
+          attendance_marked?: boolean
+          created_at?: string
+          description?: string
+          id?: string
+          instructor_rating: number
+          session_id: string
+          student_id: string
+          understanding_rating: number
+        }
+        Update: {
+          ai_score?: number | null
+          attendance_marked?: boolean
+          created_at?: string
+          description?: string
+          id?: string
+          instructor_rating?: number
+          session_id?: string
+          student_id?: string
+          understanding_rating?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
