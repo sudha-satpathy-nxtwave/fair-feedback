@@ -12,6 +12,7 @@ import {
   recordSubmission,
 } from "@/lib/feedbackValidation";
 import { supabase } from "@/integrations/supabase/client";
+import { getLocalDateString } from "@/lib/dateUtils";
 
 interface FeedbackFormProps {
   sessionId: string;
@@ -108,7 +109,7 @@ const FeedbackForm = ({ sessionId }: FeedbackFormProps) => {
       // Auto-mark attendance if AI score >= 75
       if (finalScore >= 75 || bothFive) {
         const instructorId = sessionId.split("_")[0];
-        const today = new Date().toISOString().split("T")[0];
+        const today = getLocalDateString();
 
         await supabase.from("daily_attendance").upsert(
           { student_id: trimmedId, date: today, status: "Present", instructor_id: instructorId },

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Download, Flame, Users, MessageSquare, KeyRound, CheckCircle2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { BookOpen, Download, Flame, Users, MessageSquare, KeyRound, CheckCircle2, QrCode, ListChecks } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,9 +9,12 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { exportToExcel } from "@/lib/feedbackStore";
 import SessionCodeAdmin from "@/components/SessionCodeAdmin";
-import LiveAttendanceTable from "@/components/LiveAttendanceTable";
+import RosterAttendanceTable from "@/components/RosterAttendanceTable";
+import RollingNumber from "@/components/RollingNumber";
+import TopFeedbackCarousel from "@/components/TopFeedbackCarousel";
+import FeedbackTrendChart from "@/components/FeedbackTrendChart";
+import BulkStudentUpload from "@/components/BulkStudentUpload";
 
 interface FeedbackRow {
   id: string;
@@ -53,6 +57,33 @@ function computeStreaks(feedbacks: FeedbackRow[], instructor: string): StreakInf
   return streaks.sort((a, b) => b.currentStreak - a.currentStreak);
 }
 
+async function exportInstructorToExcel(feedbacks: FeedbackRow[], instructor: string) {
+  const XLSX = await import("xlsx");
+  const filtered = feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()));
+  const feedbackRows = filtered.map((f) => ({
+    Timestamp: f.created_at,
+    "Student ID": f.student_id,
+    "Session ID": f.session_id,
+    "Understanding": f.understanding_rating,
+    "Instructor": f.instructor_rating,
+    "AI Score": f.ai_score ?? "",
+    Description: f.description,
+    "Attendance": f.attendance_marked ? "Yes" : "No",
+  }));
+  const streakRows = computeStreaks(feedbacks, instructor).map((s) => ({
+    "Student ID": s.student_id,
+    "Total Sessions": s.totalSessions,
+    "Current Streak": s.currentStreak,
+    "Dates Attended": s.dates.join(", "),
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(feedbackRows);
+  const ws2 = XLSX.utils.json_to_sheet(streakRows);
+  XLSX.utils.book_append_sheet(wb, ws1, "Feedback");
+  XLSX.utils.book_append_sheet(wb, ws2, "Streaks");
+  XLSX.writeFile(wb, `${instructor}_feedback_report.xlsx`);
+}
+
 const Dashboard = () => {
   const [instructorFilter, setInstructorFilter] = useState("");
   const [allFeedback, setAllFeedback] = useState<FeedbackRow[]>([]);
@@ -82,16 +113,10 @@ const Dashboard = () => {
     [allFeedback, activeInstructor]
   );
 
-  // Group feedback by instructor for state separation
-  const feedbackByInstructor = useMemo(() => {
-    const map = new Map<string, FeedbackRow[]>();
-    for (const fb of allFeedback) {
-      const inst = fb.session_id.split("_")[0];
-      if (!map.has(inst)) map.set(inst, []);
-      map.get(inst)!.push(fb);
-    }
-    return map;
-  }, [allFeedback]);
+  const topFeedbacks = useMemo(
+    () => filteredFeedback.filter((f) => (f.ai_score ?? 0) >= 95).slice(0, 10),
+    [filteredFeedback]
+  );
 
   const streaks = useMemo(
     () => (activeInstructor ? computeStreaks(allFeedback, activeInstructor) : []),
@@ -113,13 +138,21 @@ const Dashboard = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground">Instructor Dashboard</h1>
-              <p className="text-xs text-muted-foreground">View feedback, attendance & manage session codes</p>
+              <p className="text-xs text-muted-foreground">Feedback, attendance & live analytics</p>
             </div>
           </div>
-          <Button onClick={() => exportToExcel(activeInstructor)} disabled={!filteredFeedback.length} size="sm">
-            <Download className="w-4 h-4 mr-1.5" />
-            Export Excel
-          </Button>
+          <div className="flex gap-2">
+            <Link to="/qr-hub">
+              <Button variant="outline" size="sm">
+                <QrCode className="w-4 h-4 mr-1.5" />
+                QR Hub
+              </Button>
+            </Link>
+            <Button onClick={() => exportInstructorToExcel(allFeedback, activeInstructor)} disabled={!filteredFeedback.length} size="sm">
+              <Download className="w-4 h-4 mr-1.5" />
+              Export Excel
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-1.5">
@@ -149,24 +182,45 @@ const Dashboard = () => {
           )}
         </div>
 
+        {/* Stat cards with rolling animations */}
         <div className="grid grid-cols-3 gap-3">
           {[
             { icon: MessageSquare, label: "Responses", value: filteredFeedback.length },
             { icon: Users, label: "Students", value: streaks.length },
             { icon: Flame, label: "Best Streak", value: streaks.length ? streaks[0].currentStreak : 0 },
-          ].map(({ icon: Icon, label, value }) => (
-            <div key={label} className="bg-card border border-border rounded-xl p-4 text-center space-y-1">
+          ].map(({ icon: Icon, label, value }, idx) => (
+            <motion.div
+              key={label}
+              initial={{ opacity: 0, scale: 0.92 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: idx * 0.08, type: "spring", stiffness: 220, damping: 22 }}
+              whileHover={{ y: -3 }}
+              className="bg-gradient-to-br from-card to-secondary/30 border border-border rounded-xl p-4 text-center space-y-1"
+            >
               <Icon className="w-5 h-5 text-primary mx-auto" />
-              <p className="text-2xl font-bold text-foreground">{value}</p>
+              <p className="text-3xl font-bold text-foreground tabular-nums">
+                <RollingNumber value={value} />
+              </p>
               <p className="text-xs text-muted-foreground">{label}</p>
-            </div>
+            </motion.div>
           ))}
+        </div>
+
+        {/* Trend chart + Top feedbacks */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <FeedbackTrendChart feedback={filteredFeedback} />
+          <div className="rounded-xl border border-border bg-card p-5">
+            <TopFeedbackCarousel items={topFeedbacks} />
+          </div>
         </div>
 
         <Tabs defaultValue="responses" className="space-y-4">
           <TabsList>
             <TabsTrigger value="responses">Responses</TabsTrigger>
-            <TabsTrigger value="attendance">Live Attendance</TabsTrigger>
+            <TabsTrigger value="attendance">
+              <ListChecks className="w-3.5 h-3.5 mr-1" />
+              Live Attendance
+            </TabsTrigger>
             <TabsTrigger value="streaks">Streaks</TabsTrigger>
             <TabsTrigger value="admin">
               <KeyRound className="w-3.5 h-3.5 mr-1" />
@@ -196,7 +250,7 @@ const Dashboard = () => {
                   <TableBody>
                     {filteredFeedback.map((fb) => (
                       <TableRow key={fb.id}>
-                        <TableCell className="font-medium">{fb.student_id}</TableCell>
+                        <TableCell className="font-medium font-mono text-xs">{fb.student_id}</TableCell>
                         <TableCell className="text-muted-foreground text-xs">
                           {new Date(fb.created_at).toLocaleDateString()}
                         </TableCell>
@@ -204,13 +258,13 @@ const Dashboard = () => {
                         <TableCell className="text-center">{fb.instructor_rating}⭐</TableCell>
                         <TableCell className="max-w-[200px] truncate text-xs">{fb.description}</TableCell>
                         <TableCell className="text-center">
-                          <span className={`text-xs font-medium ${(fb.ai_score ?? 0) >= 75 ? "text-green-500" : "text-amber-500"}`}>
+                          <span className={`text-xs font-medium ${(fb.ai_score ?? 0) >= 75 ? "text-success" : "text-warning"}`}>
                             {fb.ai_score ?? "—"}
                           </span>
                         </TableCell>
                         <TableCell className="text-center">
                           {fb.attendance_marked ? (
-                            <CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" />
+                            <CheckCircle2 className="w-4 h-4 text-success mx-auto" />
                           ) : (
                             <span className="text-xs text-destructive">✗</span>
                           )}
@@ -224,7 +278,7 @@ const Dashboard = () => {
           </TabsContent>
 
           <TabsContent value="attendance">
-            <LiveAttendanceTable instructorId={activeInstructor} />
+            <RosterAttendanceTable instructorId={activeInstructor} />
           </TabsContent>
 
           <TabsContent value="streaks">
@@ -244,12 +298,12 @@ const Dashboard = () => {
                   <TableBody>
                     {streaks.map((s) => (
                       <TableRow key={s.student_id}>
-                        <TableCell className="font-medium">{s.student_id}</TableCell>
+                        <TableCell className="font-medium font-mono text-xs">{s.student_id}</TableCell>
                         <TableCell className="text-center">{s.totalSessions}</TableCell>
                         <TableCell className="text-center">
                           <span className="inline-flex items-center gap-1">
                             {s.currentStreak}
-                            {s.currentStreak >= 3 && <Flame className="w-4 h-4 text-orange-500" />}
+                            {s.currentStreak >= 3 && <Flame className="w-4 h-4 text-warning" />}
                           </span>
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground max-w-[250px] truncate">
@@ -263,8 +317,12 @@ const Dashboard = () => {
             )}
           </TabsContent>
 
-          <TabsContent value="admin">
+          <TabsContent value="admin" className="space-y-8">
             <SessionCodeAdmin instructorId={activeInstructor} />
+            <div className="border-t border-border pt-6">
+              <h3 className="text-sm font-bold text-foreground mb-3">Data Management</h3>
+              <BulkStudentUpload defaultInstructorId={activeInstructor} />
+            </div>
           </TabsContent>
         </Tabs>
       </motion.div>

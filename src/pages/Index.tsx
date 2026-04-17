@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { BookOpen, LayoutDashboard } from "lucide-react";
+import { BookOpen, LayoutDashboard, QrCode } from "lucide-react";
 import { Link } from "react-router-dom";
 import QRGenerator from "@/components/QRGenerator";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ const Index = () => {
         transition={{ duration: 0.5 }}
         className="feedback-card bg-card rounded-2xl p-6 sm:p-8 w-full max-w-md"
       >
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-6 gap-2 flex-wrap">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
               <BookOpen className="w-5 h-5 text-primary" />
@@ -23,12 +23,20 @@ const Index = () => {
               <p className="text-xs text-muted-foreground">Instructor Portal</p>
             </div>
           </div>
-          <Link to="/dashboard">
-            <Button variant="ghost" size="sm">
-              <LayoutDashboard className="w-4 h-4 mr-1" />
-              Dashboard
-            </Button>
-          </Link>
+          <div className="flex gap-1">
+            <Link to="/qr-hub">
+              <Button variant="ghost" size="sm">
+                <QrCode className="w-4 h-4 mr-1" />
+                QR Hub
+              </Button>
+            </Link>
+            <Link to="/dashboard">
+              <Button variant="ghost" size="sm">
+                <LayoutDashboard className="w-4 h-4 mr-1" />
+                Dashboard
+              </Button>
+            </Link>
+          </div>
         </div>
         <QRGenerator />
       </motion.div>

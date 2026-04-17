@@ -8,6 +8,7 @@ import {
   InputOTPSlot,
 } from "@/components/ui/input-otp";
 import { supabase } from "@/integrations/supabase/client";
+import { getLocalDateString } from "@/lib/dateUtils";
 
 interface SessionCodeGateProps {
   instructorId: string;
@@ -28,7 +29,7 @@ const SessionCodeGate = ({ instructorId, onVerified }: SessionCodeGateProps) => 
     setLoading(true);
     setError("");
 
-    const today = new Date().toISOString().split("T")[0];
+    const today = getLocalDateString();
 
     const { data, error: dbError } = await supabase
       .from("session_codes")
