@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/input-otp";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { getLocalDateString } from "@/lib/dateUtils";
 
 interface Props {
   instructorId: string;
@@ -18,7 +19,7 @@ const SessionCodeAdmin = ({ instructorId }: Props) => {
   const [currentCode, setCurrentCode] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalDateString();
 
   useEffect(() => {
     if (!instructorId) return;
