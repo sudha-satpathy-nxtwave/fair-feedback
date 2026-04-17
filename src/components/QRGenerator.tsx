@@ -4,10 +4,12 @@ import { motion } from "framer-motion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QrCode, Copy, Check } from "lucide-react";
+import { getLocalDateString } from "@/lib/dateUtils";
 
 const QRGenerator = () => {
   const [instructorName, setInstructorName] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  // FIX: use local-timezone date, not UTC, so it matches what SessionCodeAdmin saves.
+  const [date, setDate] = useState(() => getLocalDateString());
   const [generated, setGenerated] = useState<{ instructor: string; date: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
