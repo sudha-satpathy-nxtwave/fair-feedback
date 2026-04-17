@@ -1,17 +1,19 @@
 import { motion } from "framer-motion";
-import { BookOpen, LayoutDashboard, QrCode } from "lucide-react";
+import { BookOpen, LayoutDashboard, QrCode, LogIn } from "lucide-react";
 import { Link } from "react-router-dom";
 import QRGenerator from "@/components/QRGenerator";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Index = () => {
+  const { user } = useAuth();
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-background">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-primary/5">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="feedback-card bg-card rounded-2xl p-6 sm:p-8 w-full max-w-md"
+        className="feedback-card bg-card/70 backdrop-blur-xl border border-border/50 rounded-2xl p-6 sm:p-8 w-full max-w-md"
       >
         <div className="flex items-center justify-between mb-6 gap-2 flex-wrap">
           <div className="flex items-center gap-3">
@@ -24,18 +26,29 @@ const Index = () => {
             </div>
           </div>
           <div className="flex gap-1">
-            <Link to="/qr-hub">
-              <Button variant="ghost" size="sm">
-                <QrCode className="w-4 h-4 mr-1" />
-                QR Hub
-              </Button>
-            </Link>
-            <Link to="/dashboard">
-              <Button variant="ghost" size="sm">
-                <LayoutDashboard className="w-4 h-4 mr-1" />
-                Dashboard
-              </Button>
-            </Link>
+            {user ? (
+              <>
+                <Link to="/instructor-qr">
+                  <Button variant="ghost" size="sm">
+                    <QrCode className="w-4 h-4 mr-1" />
+                    QR Hub
+                  </Button>
+                </Link>
+                <Link to="/dashboard">
+                  <Button variant="ghost" size="sm">
+                    <LayoutDashboard className="w-4 h-4 mr-1" />
+                    Dashboard
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <Link to="/signin">
+                <Button variant="ghost" size="sm">
+                  <LogIn className="w-4 h-4 mr-1" />
+                  Sign In
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
         <QRGenerator />
