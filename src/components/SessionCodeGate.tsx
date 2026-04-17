@@ -30,6 +30,7 @@ const SessionCodeGate = ({ instructorId, onVerified }: SessionCodeGateProps) => 
     setError("");
 
     const today = getLocalDateString();
+    console.log("[SessionCodeGate] Verifying", { instructorId, today, enteredCode: code });
 
     const { data, error: dbError } = await supabase
       .from("session_codes")
@@ -39,18 +40,22 @@ const SessionCodeGate = ({ instructorId, onVerified }: SessionCodeGateProps) => 
       .maybeSingle();
 
     setLoading(false);
+    console.log("[SessionCodeGate] DB result:", { data, dbError });
 
     if (dbError) {
-      setError("Could not verify code. Please try again.");
+      setError(`Could not verify code: ${dbError.message}`);
       return;
     }
 
     if (!data) {
-      setError("No session code set for today. Contact your instructor.");
+      setError(`No code set for today (${today}) for instructor "${instructorId}". Ask your instructor to set it.`);
       return;
     }
 
-    if (data.code !== code) {
+    // Strict string comparison
+    const stored = String(data.code).trim();
+    const entered = String(code).trim();
+    if (stored !== entered) {
       setError("Invalid code. Please check with your instructor.");
       return;
     }
