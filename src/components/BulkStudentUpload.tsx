@@ -6,9 +6,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 interface CsvRow {
+  niat_id?: string;
   student_id?: string;
   name?: string;
+  new_section?: string;
   section?: string;
+  gender?: string;
+  daily_commute_type?: string;
+  commute_type?: string;
   instructor_id?: string;
 }
 
@@ -30,15 +35,17 @@ const BulkStudentUpload = ({ defaultInstructorId = "", onUploaded }: Props) => {
       complete: async (results) => {
         const rows = results.data
           .map((r) => ({
-            student_id: (r.student_id || "").toString().trim().toUpperCase(),
+            student_id: ((r.niat_id || r.student_id) || "").toString().trim().toUpperCase(),
             name: (r.name || "").toString().trim(),
-            section: (r.section || "").toString().trim(),
+            section: ((r.new_section || r.section) || "").toString().trim().toUpperCase(),
+            gender: (r.gender || "").toString().trim(),
+            commute_type: ((r.daily_commute_type || r.commute_type) || "").toString().trim(),
             instructor_id: (r.instructor_id || defaultInstructorId).toString().trim().toLowerCase(),
           }))
           .filter((r) => r.student_id);
 
         if (!rows.length) {
-          toast.error("No valid rows found. Required column: student_id");
+          toast.error("No valid rows found. Required column: NIAT ID");
           setUploading(false);
           return;
         }
@@ -66,7 +73,10 @@ const BulkStudentUpload = ({ defaultInstructorId = "", onUploaded }: Props) => {
   };
 
   const downloadTemplate = () => {
-    const csv = "student_id,name,section,instructor_id\nNW0001,John Doe,A,radhe\nNW0002,Jane Smith,A,radhe\n";
+    const csv =
+      "NIAT ID,Name,New Section,Gender,Daily commute type\n" +
+      "NW0001,John Doe,S001,M,Walk\n" +
+      "NW0002,Jane Smith,S001,F,Bus\n";
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -84,7 +94,7 @@ const BulkStudentUpload = ({ defaultInstructorId = "", onUploaded }: Props) => {
           Bulk Upload Students
         </h3>
         <p className="text-xs text-muted-foreground mt-1">
-          CSV columns: <code className="text-foreground/80">student_id, name, section, instructor_id</code>
+          CSV columns: <code className="text-foreground/80">NIAT ID, Name, New Section, Gender, Daily commute type</code>
         </p>
       </div>
 
