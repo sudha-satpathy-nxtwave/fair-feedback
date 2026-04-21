@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clipboard, ClipboardCheck } from "lucide-react";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -14,6 +14,8 @@ interface Student {
   name: string;
   section: string;
   instructor_id: string;
+  gender?: string;
+  commute_type?: string;
 }
 
 interface AttendanceRecord {
@@ -25,7 +27,13 @@ interface AttendanceRecord {
 }
 
 interface Props {
-  instructorId: string;
+  /** Optional — when set, only sections belonging to this instructor are shown. */
+  instructorId?: string;
+}
+
+/** Numeric-aware sort: NW0001 < NW0002 < NW0010 */
+function naturalSort(a: string, b: string) {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
 const RosterAttendanceTable = ({ instructorId }: Props) => {
@@ -34,21 +42,20 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
   const [loading, setLoading] = useState(true);
   const [section, setSection] = useState<string>("all");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const today = getLocalDateString();
 
   const refresh = async () => {
-    if (!instructorId) {
-      setStudents([]);
-      setTodayAttendance(new Map());
-      setLoading(false);
-      return;
-    }
     setLoading(true);
+    const stuQuery = supabase.from("students_master").select("*");
+    const attQuery = supabase.from("daily_attendance").select("*").eq("date", today);
+
     const [stuRes, attRes] = await Promise.all([
-      supabase.from("students_master").select("*").eq("instructor_id", instructorId),
-      supabase.from("daily_attendance").select("*").eq("instructor_id", instructorId).eq("date", today),
+      instructorId ? stuQuery.eq("instructor_id", instructorId) : stuQuery,
+      instructorId ? attQuery.eq("instructor_id", instructorId) : attQuery,
     ]);
+
     if (stuRes.data) setStudents(stuRes.data as Student[]);
     if (attRes.data) {
       const map = new Map<string, AttendanceRecord>();
@@ -64,28 +71,35 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
   }, [instructorId]);
 
   const sections = useMemo(
-    () => [...new Set(students.map((s) => s.section).filter(Boolean))].sort(),
+    () => [...new Set(students.map((s) => s.section).filter(Boolean))].sort(naturalSort),
     [students]
   );
 
-  const visible = useMemo(
-    () => (section === "all" ? students : students.filter((s) => s.section === section)),
-    [students, section]
-  );
+  // Default to first section once students load (instead of "all" — better UX per spec)
+  useEffect(() => {
+    if (section === "all" && sections.length > 0) {
+      setSection(sections[0]);
+    }
+  }, [sections, section]);
+
+  const visible = useMemo(() => {
+    const list = section === "all" ? students : students.filter((s) => s.section === section);
+    return [...list].sort((a, b) => naturalSort(a.student_id, b.student_id));
+  }, [students, section]);
 
   const toggleStatus = async (student: Student) => {
     setBusyId(student.student_id);
     const existing = todayAttendance.get(student.student_id);
+    const targetInstructor = instructorId || student.instructor_id || "";
 
     if (!existing) {
-      // mark Present
       const { data, error } = await supabase
         .from("daily_attendance")
         .insert({
           student_id: student.student_id,
           date: today,
           status: "Present",
-          instructor_id: instructorId,
+          instructor_id: targetInstructor,
         })
         .select()
         .single();
@@ -96,31 +110,39 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
         setTodayAttendance(next);
         toast.success(`${student.student_id} marked Present`);
       }
-    } else {
-      // toggle: present ↔ absent (we represent absent as deletion)
-      if (existing.status === "Present") {
-        const { error } = await supabase.from("daily_attendance").delete().eq("id", existing.id);
-        if (error) toast.error("Failed to update");
-        else {
-          const next = new Map(todayAttendance);
-          next.delete(student.student_id);
-          setTodayAttendance(next);
-          toast.success(`${student.student_id} marked Absent`);
-        }
+    } else if (existing.status === "Present") {
+      const { error } = await supabase.from("daily_attendance").delete().eq("id", existing.id);
+      if (error) toast.error("Failed to update");
+      else {
+        const next = new Map(todayAttendance);
+        next.delete(student.student_id);
+        setTodayAttendance(next);
+        toast.success(`${student.student_id} marked Absent`);
       }
     }
     setBusyId(null);
   };
 
-  if (!instructorId) {
-    return <p className="text-sm text-muted-foreground text-center py-12">Select an instructor first.</p>;
-  }
+  const copyStatusColumn = async () => {
+    const lines = visible.map((s) =>
+      todayAttendance.get(s.student_id)?.status === "Present" ? "Present" : "Absent"
+    );
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      toast.success(`Copied ${lines.length} status values — paste into Excel`);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error("Clipboard blocked by browser");
+    }
+  };
+
   if (loading) return <p className="text-sm text-muted-foreground text-center py-12">Loading roster...</p>;
   if (!students.length) {
     return (
       <div className="text-center py-12 space-y-1.5">
-        <p className="text-sm text-muted-foreground">No students in roster for <strong>{instructorId}</strong>.</p>
-        <p className="text-xs text-muted-foreground">Use the Admin tab to bulk upload your roster.</p>
+        <p className="text-sm text-muted-foreground">No students in roster yet.</p>
+        <p className="text-xs text-muted-foreground">Ask an admin to bulk upload your roster.</p>
       </div>
     );
   }
@@ -133,26 +155,32 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
         <div className="text-xs text-muted-foreground">
           <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present today ({today})
         </div>
-        {sections.length > 0 && (
-          <Select value={section} onValueChange={setSection}>
-            <SelectTrigger className="h-8 w-[140px] text-xs">
-              <SelectValue placeholder="All sections" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All sections</SelectItem>
-              {sections.map((s) => (
-                <SelectItem key={s} value={s}>Section {s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <div className="flex gap-2">
+          {sections.length > 0 && (
+            <Select value={section} onValueChange={setSection}>
+              <SelectTrigger className="h-8 w-[160px] text-xs">
+                <SelectValue placeholder="Section" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sections</SelectItem>
+                {sections.map((s) => (
+                  <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button size="sm" variant="outline" onClick={copyStatusColumn} className="h-8 gap-1.5 text-xs">
+            {copied ? <ClipboardCheck className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
+            {copied ? "Copied!" : "Copy Status Column"}
+          </Button>
+        </div>
       </div>
 
-      <div className="border border-border rounded-xl overflow-hidden">
+      <div className="border border-border rounded-xl overflow-hidden bg-card/60 backdrop-blur-xl">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Student ID</TableHead>
+              <TableHead>NIAT ID</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Section</TableHead>
               <TableHead className="text-center">Status</TableHead>
