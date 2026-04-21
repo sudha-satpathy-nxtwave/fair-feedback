@@ -2,23 +2,22 @@ import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
-import { ArrowLeft, Download, Copy, Check, QrCode, Plus } from "lucide-react";
+import { ArrowLeft, Download, Copy, Check, QrCode, Plus, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { getLocalDateString } from "@/lib/dateUtils";
 
 interface Instructor {
-  id: string;
+  id: string;            // username slug
   displayName: string;
+  qrImageUrl?: string | null;
 }
 
 const QRCard = ({ instructor }: { instructor: Instructor }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
-  const today = getLocalDateString();
-  const url = `${window.location.origin}/feedback?instructor=${encodeURIComponent(instructor.displayName)}&date=${today}&ref=${instructor.id}`;
+  const url = `${window.location.origin}/feedback?instructor=${encodeURIComponent(instructor.displayName)}&ref=${instructor.id}`;
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(url);
@@ -28,6 +27,15 @@ const QRCard = ({ instructor }: { instructor: Instructor }) => {
   };
 
   const handleDownload = () => {
+    if (instructor.qrImageUrl) {
+      // Direct download of uploaded image
+      const a = document.createElement("a");
+      a.href = instructor.qrImageUrl;
+      a.download = `${instructor.id}_qr.png`;
+      a.target = "_blank";
+      a.click();
+      return;
+    }
     const svg = ref.current?.querySelector("svg");
     if (!svg) return;
     const svgData = new XMLSerializer().serializeToString(svg);
@@ -67,10 +75,19 @@ const QRCard = ({ instructor }: { instructor: Instructor }) => {
       <div>
         <h3 className="text-base font-bold text-foreground capitalize">{instructor.displayName}</h3>
         <p className="text-xs text-muted-foreground font-mono">/{instructor.id}</p>
+        {instructor.qrImageUrl && (
+          <p className="text-[10px] text-primary mt-0.5 flex items-center gap-1">
+            <ImageIcon className="w-3 h-3" />Custom QR
+          </p>
+        )}
       </div>
 
-      <div ref={ref} className="bg-white p-4 rounded-xl flex items-center justify-center">
-        <QRCodeSVG value={url} size={180} level="H" />
+      <div ref={ref} className="bg-white p-4 rounded-xl flex items-center justify-center min-h-[212px]">
+        {instructor.qrImageUrl ? (
+          <img src={instructor.qrImageUrl} alt={`${instructor.displayName} QR`} className="max-h-44 object-contain" />
+        ) : (
+          <QRCodeSVG value={url} size={180} level="H" />
+        )}
       </div>
 
       <div className="flex gap-2">
@@ -94,36 +111,41 @@ const InstructorQRHub = () => {
 
   const load = async () => {
     setLoading(true);
-    // Pull distinct instructor_ids from session_codes + students_master + feedback
-    const [codes, students, fb] = await Promise.all([
-      supabase.from("session_codes").select("instructor_id"),
-      supabase.from("students_master").select("instructor_id"),
-      supabase.from("attendance_feedback").select("session_id"),
-    ]);
-    const ids = new Set<string>();
-    codes.data?.forEach((r: { instructor_id: string }) => r.instructor_id && ids.add(r.instructor_id));
-    students.data?.forEach((r: { instructor_id: string }) => r.instructor_id && ids.add(r.instructor_id));
-    fb.data?.forEach((r: { session_id: string }) => {
-      const id = r.session_id.split("_")[0];
-      if (id) ids.add(id);
-    });
-    setInstructors([...ids].sort().map((id) => ({ id, displayName: id.replace(/-/g, " ") })));
+    const { data: profiles } = await supabase
+      .from("instructor_profiles")
+      .select("username, display_name, qr_image_url")
+      .order("display_name");
+    setInstructors(
+      (profiles ?? []).map((p) => ({
+        id: p.username,
+        displayName: p.display_name,
+        qrImageUrl: p.qr_image_url,
+      }))
+    );
     setLoading(false);
   };
 
   useEffect(() => { load(); }, []);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const trimmed = newName.trim();
     if (!trimmed) return;
-    const id = trimmed.toLowerCase().replace(/\s+/g, "-");
+    const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     if (instructors.some((i) => i.id === id)) {
       toast.info("Instructor already in list");
       return;
     }
-    setInstructors([...instructors, { id, displayName: trimmed }].sort((a, b) => a.id.localeCompare(b.id)));
+    const { error } = await supabase.from("instructor_profiles").insert({
+      username: id,
+      display_name: trimmed,
+    });
+    if (error) {
+      toast.error(`Failed: ${error.message}`);
+      return;
+    }
     setNewName("");
     toast.success(`Added ${trimmed}`);
+    load();
   };
 
   return (
@@ -153,7 +175,7 @@ const InstructorQRHub = () => {
 
         <div className="rounded-xl border border-border bg-card p-4 flex flex-wrap gap-2 items-end">
           <div className="flex-1 min-w-[200px] space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Add new instructor</label>
+            <label className="text-xs font-semibold text-foreground">Add new instructor (no custom QR)</label>
             <Input
               placeholder="e.g. John Smith"
               value={newName}
@@ -161,6 +183,9 @@ const InstructorQRHub = () => {
               onKeyDown={(e) => e.key === "Enter" && handleAdd()}
               className="h-9"
             />
+            <p className="text-[10px] text-muted-foreground">
+              Instructors normally self-register at <code>/setup</code> where they can also upload a custom QR.
+            </p>
           </div>
           <Button size="sm" onClick={handleAdd} disabled={!newName.trim()} className="gap-1.5">
             <Plus className="w-3.5 h-3.5" />
@@ -172,7 +197,7 @@ const InstructorQRHub = () => {
           <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
         ) : instructors.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-12">
-            No instructors yet. Add one above to generate a QR.
+            No instructors yet. Add one above or have them register at <code>/setup</code>.
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

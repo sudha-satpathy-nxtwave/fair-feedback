@@ -3,23 +3,25 @@ import { motion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
 import {
   BookOpen, Download, Flame, Users, MessageSquare, KeyRound,
-  CheckCircle2, QrCode, ListChecks, LogOut, Shield, Percent, UserCog,
+  CheckCircle2, QrCode, ListChecks, LogOut, Shield, Percent, FileSpreadsheet,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2 } from "lucide-react";
+import { Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
+import { useLocalAuth } from "@/contexts/LocalAuthContext";
 import SessionCodeAdmin from "@/components/SessionCodeAdmin";
 import RosterAttendanceTable from "@/components/RosterAttendanceTable";
 import RollingNumber from "@/components/RollingNumber";
-import TopFeedbackTicker from "@/components/TopFeedbackTicker";
+import CategoryTicker from "@/components/CategoryTicker";
 import FeedbackTrendChart from "@/components/FeedbackTrendChart";
 import BulkStudentUpload from "@/components/BulkStudentUpload";
-import UserManagementAdmin from "@/components/UserManagementAdmin";
+import CoAdminPinAdmin from "@/components/CoAdminPinAdmin";
 import { getLocalDateString } from "@/lib/dateUtils";
 
 interface FeedbackRow {
@@ -32,6 +34,11 @@ interface FeedbackRow {
   ai_score: number | null;
   attendance_marked: boolean;
   created_at: string;
+}
+
+interface InstructorProfile {
+  username: string;
+  display_name: string;
 }
 
 interface StreakInfo {
@@ -68,16 +75,16 @@ async function exportInstructorToExcel(feedbacks: FeedbackRow[], instructor: str
   const filtered = feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()));
   const feedbackRows = filtered.map((f) => ({
     Timestamp: f.created_at,
-    "Student ID": f.student_id,
+    "NIAT ID": f.student_id,
     "Session ID": f.session_id,
-    "Understanding": f.understanding_rating,
-    "Instructor": f.instructor_rating,
+    Understanding: f.understanding_rating,
+    Instructor: f.instructor_rating,
     "AI Score": f.ai_score ?? "",
     Description: f.description,
-    "Attendance": f.attendance_marked ? "Yes" : "No",
+    Attendance: f.attendance_marked ? "Yes" : "No",
   }));
   const streakRows = computeStreaks(feedbacks, instructor).map((s) => ({
-    "Student ID": s.student_id,
+    "NIAT ID": s.student_id,
     "Total Sessions": s.totalSessions,
     "Current Streak": s.currentStreak,
     "Dates Attended": s.dates.join(", "),
@@ -91,39 +98,61 @@ async function exportInstructorToExcel(feedbacks: FeedbackRow[], instructor: str
 }
 
 const Dashboard = () => {
-  const { user, roleInfo, signOut } = useAuth();
+  const { session, signOut, loading: authLoading } = useLocalAuth();
   const navigate = useNavigate();
-  const isAdmin = roleInfo?.role === "admin";
-  const lockedInstructor = roleInfo?.role === "instructor" ? roleInfo.instructor_id ?? "" : null;
 
+  // Hooks must run in the same order on every render — call them all before any early return.
+  const isAdmin = session?.role === "admin" || session?.role === "co-admin";
+  const isMasterAdmin = session?.role === "admin";
+  const lockedInstructor = session?.role === "instructor" ? session.username ?? "" : null;
+  const today = getLocalDateString();
+
+  const [allInstructors, setAllInstructors] = useState<InstructorProfile[]>([]);
   const [instructorFilter, setInstructorFilter] = useState(lockedInstructor ?? "");
   const [allFeedback, setAllFeedback] = useState<FeedbackRow[]>([]);
   const [dbLoading, setDbLoading] = useState(true);
   const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
 
-  const today = getLocalDateString();
-
+  // Load registered instructor profiles (for admin filter dropdown)
   useEffect(() => {
-    const fetchData = async () => {
-      let query = supabase.from("attendance_feedback").select("*").order("created_at", { ascending: false });
-      // Instructor scope is enforced by client filter; RLS still permits read.
-      const { data, error } = await query;
-      if (!error && data) setAllFeedback(data as FeedbackRow[]);
-      setDbLoading(false);
-    };
-    fetchData();
+    (async () => {
+      const { data } = await supabase
+        .from("instructor_profiles")
+        .select("username, display_name")
+        .order("display_name");
+      if (data) setAllInstructors(data as InstructorProfile[]);
+    })();
   }, []);
 
-  const instructors = useMemo(() => {
-    if (lockedInstructor) return [lockedInstructor];
-    const set = new Set(allFeedback.map((f) => f.session_id.split("_")[0]));
-    return [...set];
-  }, [allFeedback, lockedInstructor]);
+  // Load feedback
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from("attendance_feedback")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) setAllFeedback(data as FeedbackRow[]);
+      setDbLoading(false);
+    })();
+  }, []);
 
-  const activeInstructor = instructorFilter || instructors[0] || "";
+  const knownInstructorIds = useMemo(() => {
+    const set = new Set<string>(allInstructors.map((i) => i.username));
+    allFeedback.forEach((f) => set.add(f.session_id.split("_")[0]));
+    return [...set].filter(Boolean).sort();
+  }, [allInstructors, allFeedback]);
 
-  // Fetch today's attendance % for active instructor
+  const activeInstructor = lockedInstructor || instructorFilter || knownInstructorIds[0] || "";
+
+  const activeProfile = useMemo(
+    () => allInstructors.find((i) => i.username === activeInstructor),
+    [allInstructors, activeInstructor]
+  );
+
+  const displayName = activeProfile?.display_name || session?.displayName || activeInstructor || "Admin";
+
+  // Today's attendance + roster counts
   useEffect(() => {
     if (!activeInstructor) {
       setTodayPresentCount(0);
@@ -147,8 +176,22 @@ const Dashboard = () => {
     [allFeedback, activeInstructor]
   );
 
-  const topFeedbacks = useMemo(
-    () => filteredFeedback.filter((f) => (f.ai_score ?? 0) >= 95).slice(0, 12),
+  // Split tickers by AI score band as a proxy for category
+  // (category is also stored in localStorage on the student device, but the dashboard
+  // can't see that — so we infer: high-score + low-rating-text → improvement)
+  const appreciationFeedback = useMemo(
+    () =>
+      filteredFeedback
+        .filter((f) => (f.ai_score ?? 0) >= 80 && f.understanding_rating + f.instructor_rating >= 8)
+        .slice(0, 12),
+    [filteredFeedback]
+  );
+
+  const improvementFeedback = useMemo(
+    () =>
+      filteredFeedback
+        .filter((f) => (f.ai_score ?? 0) >= 75 && f.understanding_rating + f.instructor_rating < 8)
+        .slice(0, 12),
     [filteredFeedback]
   );
 
@@ -161,9 +204,19 @@ const Dashboard = () => {
     ? Math.round((todayPresentCount / rosterCount) * 100)
     : 0;
 
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/signin");
+  // Now safe to early-return — all hooks have been called above.
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+  if (!session) return <Navigate to="/" replace />;
+
+  const handleSignOut = () => {
+    signOut();
+    navigate("/");
   };
 
   return (
@@ -181,22 +234,24 @@ const Dashboard = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground">
-                {isAdmin ? "Admin Dashboard" : "Instructor Dashboard"}
+                Hi {displayName}!
               </h1>
               <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                 {isAdmin && <Shield className="w-3 h-3 text-primary" />}
-                {user?.email} · {roleInfo?.role}
+                <span className="capitalize">{session.role}</span>
                 {lockedInstructor && ` · ${lockedInstructor}`}
               </p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Link to="/instructor-qr">
-              <Button variant="outline" size="sm">
-                <QrCode className="w-4 h-4 mr-1.5" />
-                QR Hub
-              </Button>
-            </Link>
+          <div className="flex gap-2 flex-wrap">
+            {isAdmin && (
+              <Link to="/instructor-qr">
+                <Button variant="outline" size="sm">
+                  <QrCode className="w-4 h-4 mr-1.5" />
+                  QR Hub
+                </Button>
+              </Link>
+            )}
             <Button onClick={() => exportInstructorToExcel(allFeedback, activeInstructor)} disabled={!filteredFeedback.length} size="sm">
               <Download className="w-4 h-4 mr-1.5" />
               Export Excel
@@ -208,42 +263,34 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Instructor filter — admins only */}
-        {isAdmin && (
-          <div className="space-y-1.5">
-            <label className="text-sm font-semibold text-foreground">Filter by Instructor</label>
-            <Input
-              placeholder="e.g. john-smith"
-              value={instructorFilter}
-              onChange={(e) => setInstructorFilter(e.target.value.toLowerCase().replace(/\s+/g, "-"))}
-              className="bg-secondary/50 border-border/60 max-w-xs"
-            />
-            {instructors.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {instructors.map((inst) => (
-                  <button
-                    key={inst}
-                    onClick={() => setInstructorFilter(inst)}
-                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                      activeInstructor === inst
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-secondary/50 text-muted-foreground border-border/60 hover:bg-secondary"
-                    }`}
-                  >
-                    {inst}
-                  </button>
-                ))}
-              </div>
-            )}
+        {/* Admin: instructor switcher */}
+        {isAdmin && knownInstructorIds.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs font-semibold text-foreground">Viewing instructor:</label>
+            <Select value={activeInstructor} onValueChange={setInstructorFilter}>
+              <SelectTrigger className="h-8 w-[220px] text-xs">
+                <SelectValue placeholder="Choose instructor" />
+              </SelectTrigger>
+              <SelectContent>
+                {knownInstructorIds.map((id) => {
+                  const prof = allInstructors.find((p) => p.username === id);
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {prof?.display_name || id} <span className="text-muted-foreground ml-1">({id})</span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
           </div>
         )}
 
         {/* Glassmorphism stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { icon: MessageSquare, label: "Responses", value: filteredFeedback.length, suffix: "" },
+            { icon: MessageSquare, label: "Total Responses", value: filteredFeedback.length, suffix: "" },
             { icon: Users, label: "Students", value: streaks.length, suffix: "" },
-            { icon: Percent, label: "Today's Attendance", value: attendancePct, suffix: "%" },
+            { icon: Percent, label: "Attendance %", value: attendancePct, suffix: "%" },
             { icon: Flame, label: "Best Streak", value: streaks.length ? streaks[0].currentStreak : 0, suffix: "" },
           ].map(({ icon: Icon, label, value, suffix }, idx) => (
             <motion.div
@@ -264,31 +311,38 @@ const Dashboard = () => {
           ))}
         </div>
 
-        {/* Trend chart + Top feedback ticker */}
+        {/* Trend chart + dual tickers */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <FeedbackTrendChart feedback={filteredFeedback} />
-          <TopFeedbackTicker items={topFeedbacks} />
+          <div className="grid grid-rows-2 gap-3">
+            <CategoryTicker items={appreciationFeedback} variant="appreciation" />
+            <CategoryTicker items={improvementFeedback} variant="improvement" />
+          </div>
         </div>
 
-        <Tabs defaultValue="responses" className="space-y-4">
+        <Tabs defaultValue="attendance" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="responses">Responses</TabsTrigger>
             <TabsTrigger value="attendance">
               <ListChecks className="w-3.5 h-3.5 mr-1" />
               Live Attendance
             </TabsTrigger>
+            <TabsTrigger value="responses">Responses</TabsTrigger>
             <TabsTrigger value="streaks">Streaks</TabsTrigger>
             <TabsTrigger value="admin">
               <KeyRound className="w-3.5 h-3.5 mr-1" />
               Admin
             </TabsTrigger>
             {isAdmin && (
-              <TabsTrigger value="users">
-                <UserCog className="w-3.5 h-3.5 mr-1" />
-                Users
+              <TabsTrigger value="data">
+                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />
+                Data Mgmt
               </TabsTrigger>
             )}
           </TabsList>
+
+          <TabsContent value="attendance">
+            <RosterAttendanceTable instructorId={activeInstructor} />
+          </TabsContent>
 
           <TabsContent value="responses">
             {dbLoading ? (
@@ -300,7 +354,7 @@ const Dashboard = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Student ID</TableHead>
+                      <TableHead>NIAT ID</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead className="text-center">Understanding</TableHead>
                       <TableHead className="text-center">Instructor</TableHead>
@@ -339,10 +393,6 @@ const Dashboard = () => {
             )}
           </TabsContent>
 
-          <TabsContent value="attendance">
-            <RosterAttendanceTable instructorId={activeInstructor} />
-          </TabsContent>
-
           <TabsContent value="streaks">
             {streaks.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-12">No attendance data yet.</p>
@@ -351,7 +401,7 @@ const Dashboard = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Student ID</TableHead>
+                      <TableHead>NIAT ID</TableHead>
                       <TableHead className="text-center">Total Sessions</TableHead>
                       <TableHead className="text-center">Current Streak 🔥</TableHead>
                       <TableHead>Dates Attended</TableHead>
@@ -381,15 +431,16 @@ const Dashboard = () => {
 
           <TabsContent value="admin" className="space-y-8">
             <SessionCodeAdmin instructorId={activeInstructor} />
-            <div className="border-t border-border pt-6">
-              <h3 className="text-sm font-bold text-foreground mb-3">Data Management</h3>
-              <BulkStudentUpload defaultInstructorId={activeInstructor} />
-            </div>
+            {isMasterAdmin && (
+              <div className="border-t border-border pt-6">
+                <CoAdminPinAdmin />
+              </div>
+            )}
           </TabsContent>
 
           {isAdmin && (
-            <TabsContent value="users">
-              <UserManagementAdmin />
+            <TabsContent value="data" className="space-y-6">
+              <BulkStudentUpload defaultInstructorId={activeInstructor} />
             </TabsContent>
           )}
         </Tabs>
