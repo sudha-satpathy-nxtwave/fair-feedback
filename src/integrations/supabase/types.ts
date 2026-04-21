@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_config: {
+        Row: {
+          co_admin_pin_hash: string | null
+          created_at: string
+          id: string
+          master_pin_hash: string
+          singleton: boolean
+          updated_at: string
+        }
+        Insert: {
+          co_admin_pin_hash?: string | null
+          created_at?: string
+          id?: string
+          master_pin_hash: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Update: {
+          co_admin_pin_hash?: string | null
+          created_at?: string
+          id?: string
+          master_pin_hash?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
       attendance_feedback: {
         Row: {
           ai_score: number | null
@@ -77,6 +104,30 @@ export type Database = {
         }
         Relationships: []
       }
+      instructor_profiles: {
+        Row: {
+          created_at: string
+          display_name: string
+          qr_image_url: string | null
+          updated_at: string
+          username: string
+        }
+        Insert: {
+          created_at?: string
+          display_name: string
+          qr_image_url?: string | null
+          updated_at?: string
+          username: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string
+          qr_image_url?: string | null
+          updated_at?: string
+          username?: string
+        }
+        Relationships: []
+      }
       session_codes: {
         Row: {
           active_date: string
@@ -104,7 +155,9 @@ export type Database = {
       students_master: {
         Row: {
           class_group: string
+          commute_type: string
           created_at: string
+          gender: string
           id: string
           instructor_id: string
           name: string
@@ -113,7 +166,9 @@ export type Database = {
         }
         Insert: {
           class_group?: string
+          commute_type?: string
           created_at?: string
+          gender?: string
           id?: string
           instructor_id?: string
           name?: string
@@ -122,7 +177,9 @@ export type Database = {
         }
         Update: {
           class_group?: string
+          commute_type?: string
           created_at?: string
+          gender?: string
           id?: string
           instructor_id?: string
           name?: string
@@ -131,46 +188,15 @@ export type Database = {
         }
         Relationships: []
       }
-      user_roles: {
-        Row: {
-          created_at: string
-          id: string
-          instructor_id: string | null
-          role: Database["public"]["Enums"]["app_role"]
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          instructor_id?: string | null
-          role: Database["public"]["Enums"]["app_role"]
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          instructor_id?: string | null
-          role?: Database["public"]["Enums"]["app_role"]
-          user_id?: string
-        }
-        Relationships: []
-      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      get_user_instructor_id: { Args: { _user_id: string }; Returns: string }
-      has_role: {
-        Args: {
-          _role: Database["public"]["Enums"]["app_role"]
-          _user_id: string
-        }
-        Returns: boolean
-      }
+      [_ in never]: never
     }
     Enums: {
-      app_role: "admin" | "instructor"
+      [_ in never]: never
     }
     CompositeTypes: {
       [_ in never]: never
@@ -297,8 +323,6 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {
-      app_role: ["admin", "instructor"],
-    },
+    Enums: {},
   },
 } as const

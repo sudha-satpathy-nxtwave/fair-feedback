@@ -3,14 +3,16 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AuthProvider } from "@/contexts/AuthContext";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import Index from "./pages/Index.tsx";
-import SignIn from "./pages/SignIn.tsx";
-import FeedbackPage from "./pages/FeedbackPage.tsx";
-import Dashboard from "./pages/Dashboard.tsx";
-import InstructorQRHub from "./pages/InstructorQRHub.tsx";
-import NotFound from "./pages/NotFound.tsx";
+import { LocalAuthProvider } from "@/contexts/LocalAuthContext";
+import AdminGate from "@/components/AdminGate";
+import InstructorGate from "@/components/InstructorGate";
+import Index from "./pages/Index";
+import MasterAdmin from "./pages/MasterAdmin";
+import Setup from "./pages/Setup";
+import FeedbackPage from "./pages/FeedbackPage";
+import Dashboard from "./pages/Dashboard";
+import InstructorQRHub from "./pages/InstructorQRHub";
+import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
@@ -20,39 +22,26 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <AuthProvider>
+        <LocalAuthProvider>
           <Routes>
             <Route path="/" element={<Index />} />
-            <Route path="/signin" element={<SignIn />} />
+            <Route path="/master-admin" element={<MasterAdmin />} />
+            <Route path="/setup" element={<Setup />} />
             <Route path="/feedback" element={<FeedbackPage />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route
               path="/instructor-qr"
               element={
-                <ProtectedRoute>
+                <AdminGate>
                   <InstructorQRHub />
-                </ProtectedRoute>
+                </AdminGate>
               }
             />
             {/* Backward-compat alias */}
-            <Route
-              path="/qr-hub"
-              element={
-                <ProtectedRoute>
-                  <InstructorQRHub />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/qr-hub" element={<InstructorQRHub />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
-        </AuthProvider>
+        </LocalAuthProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
