@@ -29,6 +29,8 @@ interface AttendanceRecord {
 interface Props {
   /** Optional — when set, only sections belonging to this instructor are shown. */
   instructorId?: string;
+  /** Optional — when set, the section filter is controlled by the parent and the internal selector is hidden. */
+  sectionFilter?: string;
 }
 
 /** Numeric-aware sort: NW0001 < NW0002 < NW0010 */
@@ -36,15 +38,18 @@ function naturalSort(a: string, b: string) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
-const RosterAttendanceTable = ({ instructorId }: Props) => {
+const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Map<string, AttendanceRecord>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [section, setSection] = useState<string>("all");
+  const [internalSection, setInternalSection] = useState<string>("all");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const today = getLocalDateString();
+  // When parent controls the section, use that; otherwise fall back to internal selector.
+  const isControlled = sectionFilter !== undefined;
+  const section = isControlled ? (sectionFilter || "all") : internalSection;
 
   const refresh = async () => {
     setLoading(true);
@@ -75,12 +80,12 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
     [students]
   );
 
-  // Default to first section once students load (instead of "all" — better UX per spec)
+  // Default internal selector to first section once students load (only when uncontrolled)
   useEffect(() => {
-    if (section === "all" && sections.length > 0) {
-      setSection(sections[0]);
+    if (!isControlled && internalSection === "all" && sections.length > 0) {
+      setInternalSection(sections[0]);
     }
-  }, [sections, section]);
+  }, [sections, internalSection, isControlled]);
 
   const visible = useMemo(() => {
     const list = section === "all" ? students : students.filter((s) => s.section === section);
@@ -156,8 +161,8 @@ const RosterAttendanceTable = ({ instructorId }: Props) => {
           <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present today ({today})
         </div>
         <div className="flex gap-2">
-          {sections.length > 0 && (
-            <Select value={section} onValueChange={setSection}>
+          {!isControlled && sections.length > 0 && (
+            <Select value={section} onValueChange={setInternalSection}>
               <SelectTrigger className="h-8 w-[160px] text-xs">
                 <SelectValue placeholder="Section" />
               </SelectTrigger>

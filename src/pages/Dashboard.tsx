@@ -80,6 +80,8 @@ const Dashboard = () => {
   const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
   const [qrOpen, setQrOpen] = useState(false);
+  const [availableSections, setAvailableSections] = useState<string[]>([]);
+  const [selectedSection, setSelectedSection] = useState<string>("all");
 
   // Load instructor profiles
   useEffect(() => {
@@ -125,34 +127,59 @@ const Dashboard = () => {
     (isAdmin ? `Admin ${session?.username ?? ""}`.trim() : activeInstructor) ||
     "Admin";
 
-  // Today's attendance + roster counts (per active instructor, or global for admin all-view)
+  // Reset section filter when instructor view changes
+  useEffect(() => {
+    setSelectedSection("all");
+  }, [activeInstructor, isGlobalView]);
+
+  // Load available sections + section-aware roster/attendance counts
   useEffect(() => {
     (async () => {
-      if (isGlobalView) {
-        const [att, roster] = await Promise.all([
-          supabase.from("daily_attendance").select("id", { count: "exact", head: true })
-            .eq("date", today).eq("status", "Present"),
-          supabase.from("students_master").select("id", { count: "exact", head: true }),
-        ]);
-        setTodayPresentCount(att.count ?? 0);
-        setRosterCount(roster.count ?? 0);
-        return;
-      }
-      if (!activeInstructor) {
+      // Build the base scope for roster (by instructor unless admin global view)
+      const rosterBase = supabase.from("students_master").select("section, student_id");
+      const rosterScoped = isGlobalView
+        ? rosterBase
+        : activeInstructor
+          ? rosterBase.eq("instructor_id", activeInstructor)
+          : null;
+
+      if (!rosterScoped) {
+        setAvailableSections([]);
         setTodayPresentCount(0);
         setRosterCount(0);
         return;
       }
-      const [att, roster] = await Promise.all([
-        supabase.from("daily_attendance").select("id", { count: "exact", head: true })
-          .eq("instructor_id", activeInstructor).eq("date", today).eq("status", "Present"),
-        supabase.from("students_master").select("id", { count: "exact", head: true })
-          .eq("instructor_id", activeInstructor),
-      ]);
-      setTodayPresentCount(att.count ?? 0);
-      setRosterCount(roster.count ?? 0);
+
+      const { data: rosterRows } = await rosterScoped;
+      const rows = (rosterRows ?? []) as { section: string; student_id: string }[];
+      const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+      setAvailableSections(sections);
+
+      const sectionFilteredStudents = selectedSection === "all"
+        ? rows
+        : rows.filter((r) => r.section === selectedSection);
+      setRosterCount(sectionFilteredStudents.length);
+
+      const studentIds = sectionFilteredStudents.map((r) => r.student_id);
+      if (studentIds.length === 0) {
+        setTodayPresentCount(0);
+        return;
+      }
+
+      let attQuery = supabase
+        .from("daily_attendance")
+        .select("id", { count: "exact", head: true })
+        .eq("date", today)
+        .eq("status", "Present")
+        .in("student_id", studentIds);
+      if (!isGlobalView && activeInstructor) {
+        attQuery = attQuery.eq("instructor_id", activeInstructor);
+      }
+      const { count } = await attQuery;
+      setTodayPresentCount(count ?? 0);
     })();
-  }, [activeInstructor, today, isGlobalView]);
+  }, [activeInstructor, today, isGlobalView, selectedSection]);
 
   const filteredFeedback = useMemo(
     () => isGlobalView
@@ -238,10 +265,10 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
-            {!isAdmin && activeProfile?.qr_image_url && (
+            {!isAdmin && (
               <Button variant="default" size="sm" onClick={() => setQrOpen(true)} className="gap-1.5">
                 <QrCode className="w-4 h-4" />
-                View My QR
+                View My Session QR
               </Button>
             )}
             {isAdmin && (
@@ -288,6 +315,27 @@ const Dashboard = () => {
                 })}
               </SelectContent>
             </Select>
+          </div>
+        )}
+
+        {/* Section selector — drives roster + stat cards */}
+        {(activeInstructor || isGlobalView) && (
+          <div className="flex items-center gap-2 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
+            <label className="text-xs font-semibold text-foreground">Section:</label>
+            <Select value={selectedSection} onValueChange={setSelectedSection}>
+              <SelectTrigger className="h-8 w-[220px] text-xs">
+                <SelectValue placeholder="Choose section" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sections</SelectItem>
+                {availableSections.map((s) => (
+                  <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {availableSections.length === 0 && (
+              <span className="text-xs text-muted-foreground">No sections in roster yet</span>
+            )}
           </div>
         )}
 
@@ -344,7 +392,7 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} />
+              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} />
             )}
           </TabsContent>
 
