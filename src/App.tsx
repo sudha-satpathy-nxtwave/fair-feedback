@@ -5,7 +5,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { LocalAuthProvider } from "@/contexts/LocalAuthContext";
 import AdminGate from "@/components/AdminGate";
-import InstructorGate from "@/components/InstructorGate";
 import Index from "./pages/Index";
 import MasterAdmin from "./pages/MasterAdmin";
 import Setup from "./pages/Setup";
@@ -37,12 +36,12 @@ const App = () => (
                 </AdminGate>
               }
             />
-            {/* Backward-compat alias */}
             <Route path="/qr-hub" element={<InstructorQRHub />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </LocalAuthProvider>
-      </BrowserRouter>
+      </Toaster>
+    </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

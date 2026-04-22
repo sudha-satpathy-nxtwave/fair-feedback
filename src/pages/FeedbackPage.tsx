@@ -1,17 +1,14 @@
-import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { BookOpen, AlertTriangle } from "lucide-react";
 import FeedbackForm from "@/components/FeedbackForm";
-import SessionCodeGate from "@/components/SessionCodeGate";
 import { getLocalDateString } from "@/lib/dateUtils";
 
 const FeedbackPage = () => {
   const [searchParams] = useSearchParams();
   const instructor = searchParams.get("instructor");
-  // Date is now optional — defaults to today's local date so permanent QR links work.
+  const refSlug = searchParams.get("ref");
   const date = searchParams.get("date") || getLocalDateString();
-  const [unlocked, setUnlocked] = useState(false);
 
   if (!instructor) {
     return (
@@ -31,11 +28,12 @@ const FeedbackPage = () => {
     );
   }
 
-  const instructorId = instructor.toLowerCase().replace(/\s+/g, "-");
+  // Prefer the explicit `ref` slug from QR Hub links; fall back to slugifying the display name.
+  const instructorId = (refSlug || instructor).toLowerCase().replace(/\s+/g, "-");
   const sessionId = `${instructorId}_${date}`;
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-background">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-primary/5">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
@@ -55,11 +53,7 @@ const FeedbackPage = () => {
           </div>
         </div>
 
-        {!unlocked ? (
-          <SessionCodeGate instructorId={instructorId} onVerified={() => setUnlocked(true)} />
-        ) : (
-          <FeedbackForm sessionId={sessionId} instructorId={instructorId} />
-        )}
+        <FeedbackForm sessionId={sessionId} instructorId={instructorId} />
       </motion.div>
     </div>
   );
