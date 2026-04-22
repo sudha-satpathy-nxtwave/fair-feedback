@@ -265,10 +265,10 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
-            {!isAdmin && activeProfile?.qr_image_url && (
+            {!isAdmin && (
               <Button variant="default" size="sm" onClick={() => setQrOpen(true)} className="gap-1.5">
                 <QrCode className="w-4 h-4" />
-                View My QR
+                View My Session QR
               </Button>
             )}
             {isAdmin && (
