@@ -161,8 +161,8 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
           <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present today ({today})
         </div>
         <div className="flex gap-2">
-          {sections.length > 0 && (
-            <Select value={section} onValueChange={setSection}>
+          {!isControlled && sections.length > 0 && (
+            <Select value={section} onValueChange={setInternalSection}>
               <SelectTrigger className="h-8 w-[160px] text-xs">
                 <SelectValue placeholder="Section" />
               </SelectTrigger>
