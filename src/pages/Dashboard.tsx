@@ -127,34 +127,59 @@ const Dashboard = () => {
     (isAdmin ? `Admin ${session?.username ?? ""}`.trim() : activeInstructor) ||
     "Admin";
 
-  // Today's attendance + roster counts (per active instructor, or global for admin all-view)
+  // Reset section filter when instructor view changes
+  useEffect(() => {
+    setSelectedSection("all");
+  }, [activeInstructor, isGlobalView]);
+
+  // Load available sections + section-aware roster/attendance counts
   useEffect(() => {
     (async () => {
-      if (isGlobalView) {
-        const [att, roster] = await Promise.all([
-          supabase.from("daily_attendance").select("id", { count: "exact", head: true })
-            .eq("date", today).eq("status", "Present"),
-          supabase.from("students_master").select("id", { count: "exact", head: true }),
-        ]);
-        setTodayPresentCount(att.count ?? 0);
-        setRosterCount(roster.count ?? 0);
-        return;
-      }
-      if (!activeInstructor) {
+      // Build the base scope for roster (by instructor unless admin global view)
+      const rosterBase = supabase.from("students_master").select("section, student_id");
+      const rosterScoped = isGlobalView
+        ? rosterBase
+        : activeInstructor
+          ? rosterBase.eq("instructor_id", activeInstructor)
+          : null;
+
+      if (!rosterScoped) {
+        setAvailableSections([]);
         setTodayPresentCount(0);
         setRosterCount(0);
         return;
       }
-      const [att, roster] = await Promise.all([
-        supabase.from("daily_attendance").select("id", { count: "exact", head: true })
-          .eq("instructor_id", activeInstructor).eq("date", today).eq("status", "Present"),
-        supabase.from("students_master").select("id", { count: "exact", head: true })
-          .eq("instructor_id", activeInstructor),
-      ]);
-      setTodayPresentCount(att.count ?? 0);
-      setRosterCount(roster.count ?? 0);
+
+      const { data: rosterRows } = await rosterScoped;
+      const rows = (rosterRows ?? []) as { section: string; student_id: string }[];
+      const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+      setAvailableSections(sections);
+
+      const sectionFilteredStudents = selectedSection === "all"
+        ? rows
+        : rows.filter((r) => r.section === selectedSection);
+      setRosterCount(sectionFilteredStudents.length);
+
+      const studentIds = sectionFilteredStudents.map((r) => r.student_id);
+      if (studentIds.length === 0) {
+        setTodayPresentCount(0);
+        return;
+      }
+
+      let attQuery = supabase
+        .from("daily_attendance")
+        .select("id", { count: "exact", head: true })
+        .eq("date", today)
+        .eq("status", "Present")
+        .in("student_id", studentIds);
+      if (!isGlobalView && activeInstructor) {
+        attQuery = attQuery.eq("instructor_id", activeInstructor);
+      }
+      const { count } = await attQuery;
+      setTodayPresentCount(count ?? 0);
     })();
-  }, [activeInstructor, today, isGlobalView]);
+  }, [activeInstructor, today, isGlobalView, selectedSection]);
 
   const filteredFeedback = useMemo(
     () => isGlobalView
