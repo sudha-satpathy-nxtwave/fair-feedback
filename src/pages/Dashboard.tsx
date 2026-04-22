@@ -80,6 +80,8 @@ const Dashboard = () => {
   const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
   const [qrOpen, setQrOpen] = useState(false);
+  const [availableSections, setAvailableSections] = useState<string[]>([]);
+  const [selectedSection, setSelectedSection] = useState<string>("all");
 
   // Load instructor profiles
   useEffect(() => {
