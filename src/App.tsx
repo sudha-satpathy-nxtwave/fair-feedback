@@ -40,8 +40,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
         </LocalAuthProvider>
-      </Toaster>
-    </BrowserRouter>
+      </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );
