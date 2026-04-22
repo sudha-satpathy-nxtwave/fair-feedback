@@ -29,6 +29,8 @@ interface AttendanceRecord {
 interface Props {
   /** Optional — when set, only sections belonging to this instructor are shown. */
   instructorId?: string;
+  /** Optional — when set, the section filter is controlled by the parent and the internal selector is hidden. */
+  sectionFilter?: string;
 }
 
 /** Numeric-aware sort: NW0001 < NW0002 < NW0010 */
