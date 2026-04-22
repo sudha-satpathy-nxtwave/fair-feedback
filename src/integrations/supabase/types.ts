@@ -22,6 +22,7 @@ export type Database = {
           master_pin_hash: string
           singleton: boolean
           updated_at: string
+          username: string | null
         }
         Insert: {
           co_admin_pin_hash?: string | null
@@ -30,6 +31,7 @@ export type Database = {
           master_pin_hash: string
           singleton?: boolean
           updated_at?: string
+          username?: string | null
         }
         Update: {
           co_admin_pin_hash?: string | null
@@ -38,6 +40,7 @@ export type Database = {
           master_pin_hash?: string
           singleton?: boolean
           updated_at?: string
+          username?: string | null
         }
         Relationships: []
       }

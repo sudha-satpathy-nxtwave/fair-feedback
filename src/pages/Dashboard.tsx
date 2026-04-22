@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, Navigate } from "react-router-dom";
 import {
-  BookOpen, Download, Flame, Users, MessageSquare, KeyRound,
-  CheckCircle2, QrCode, ListChecks, LogOut, Shield, Percent, FileSpreadsheet,
+  BookOpen, Download, Users, MessageSquare, CheckCircle2, QrCode, ListChecks,
+  LogOut, Shield, Percent, FileSpreadsheet, Loader2, Image as ImageIcon, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,18 +11,15 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
-import { Navigate } from "react-router-dom";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useLocalAuth } from "@/contexts/LocalAuthContext";
-import SessionCodeAdmin from "@/components/SessionCodeAdmin";
 import RosterAttendanceTable from "@/components/RosterAttendanceTable";
 import RollingNumber from "@/components/RollingNumber";
-import CategoryTicker from "@/components/CategoryTicker";
-import FeedbackTrendChart from "@/components/FeedbackTrendChart";
+import CategoryList from "@/components/CategoryList";
 import BulkStudentUpload from "@/components/BulkStudentUpload";
-import CoAdminPinAdmin from "@/components/CoAdminPinAdmin";
 import { getLocalDateString } from "@/lib/dateUtils";
+import { toast } from "sonner";
 
 interface FeedbackRow {
   id: string;
@@ -39,71 +36,40 @@ interface FeedbackRow {
 interface InstructorProfile {
   username: string;
   display_name: string;
+  qr_image_url: string | null;
 }
 
-interface StreakInfo {
-  student_id: string;
-  totalSessions: number;
-  currentStreak: number;
-  dates: string[];
-}
-
-function computeStreaks(feedbacks: FeedbackRow[], instructor: string): StreakInfo[] {
-  const filtered = feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()));
-  const studentMap = new Map<string, Set<string>>();
-  for (const fb of filtered) {
-    if (!fb.attendance_marked) continue;
-    const dateStr = fb.session_id.split("_").slice(1).join("_");
-    if (!studentMap.has(fb.student_id)) studentMap.set(fb.student_id, new Set());
-    studentMap.get(fb.student_id)!.add(dateStr);
-  }
-  const allDates = [...new Set(filtered.map((f) => f.session_id.split("_").slice(1).join("_")))].sort();
-  const streaks: StreakInfo[] = [];
-  for (const [studentId, dates] of studentMap) {
-    let currentStreak = 0;
-    for (let i = allDates.length - 1; i >= 0; i--) {
-      if (dates.has(allDates[i])) currentStreak++;
-      else break;
-    }
-    streaks.push({ student_id: studentId, totalSessions: dates.size, currentStreak, dates: [...dates].sort() });
-  }
-  return streaks.sort((a, b) => b.currentStreak - a.currentStreak);
+function naturalSort(a: string, b: string) {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
 async function exportInstructorToExcel(feedbacks: FeedbackRow[], instructor: string) {
   const XLSX = await import("xlsx");
-  const filtered = feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()));
-  const feedbackRows = filtered.map((f) => ({
-    Timestamp: f.created_at,
-    "NIAT ID": f.student_id,
-    "Session ID": f.session_id,
-    Understanding: f.understanding_rating,
-    Instructor: f.instructor_rating,
-    "AI Score": f.ai_score ?? "",
-    Description: f.description,
-    Attendance: f.attendance_marked ? "Yes" : "No",
-  }));
-  const streakRows = computeStreaks(feedbacks, instructor).map((s) => ({
-    "NIAT ID": s.student_id,
-    "Total Sessions": s.totalSessions,
-    "Current Streak": s.currentStreak,
-    "Dates Attended": s.dates.join(", "),
-  }));
+  const filtered = instructor
+    ? feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()))
+    : feedbacks;
+  const rows = filtered
+    .sort((a, b) => naturalSort(a.student_id, b.student_id))
+    .map((f) => ({
+      Timestamp: f.created_at,
+      "NIAT ID": f.student_id,
+      "Session ID": f.session_id,
+      Understanding: f.understanding_rating,
+      Instructor: f.instructor_rating,
+      "AI Score": f.ai_score ?? "",
+      Description: f.description,
+      Attendance: f.attendance_marked ? "Present" : "Absent",
+    }));
   const wb = XLSX.utils.book_new();
-  const ws1 = XLSX.utils.json_to_sheet(feedbackRows);
-  const ws2 = XLSX.utils.json_to_sheet(streakRows);
-  XLSX.utils.book_append_sheet(wb, ws1, "Feedback");
-  XLSX.utils.book_append_sheet(wb, ws2, "Streaks");
-  XLSX.writeFile(wb, `${instructor}_feedback_report.xlsx`);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Feedback");
+  XLSX.writeFile(wb, `${instructor || "all"}_feedback_report.xlsx`);
 }
 
 const Dashboard = () => {
   const { session, signOut, loading: authLoading } = useLocalAuth();
   const navigate = useNavigate();
 
-  // Hooks must run in the same order on every render — call them all before any early return.
   const isAdmin = session?.role === "admin" || session?.role === "co-admin";
-  const isMasterAdmin = session?.role === "admin";
   const lockedInstructor = session?.role === "instructor" ? session.username ?? "" : null;
   const today = getLocalDateString();
 
@@ -113,13 +79,14 @@ const Dashboard = () => {
   const [dbLoading, setDbLoading] = useState(true);
   const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
+  const [qrOpen, setQrOpen] = useState(false);
 
-  // Load registered instructor profiles (for admin filter dropdown)
+  // Load instructor profiles
   useEffect(() => {
     (async () => {
       const { data } = await supabase
         .from("instructor_profiles")
-        .select("username, display_name")
+        .select("username, display_name, qr_image_url")
         .order("display_name");
       if (data) setAllInstructors(data as InstructorProfile[]);
     })();
@@ -143,23 +110,39 @@ const Dashboard = () => {
     return [...set].filter(Boolean).sort();
   }, [allInstructors, allFeedback]);
 
-  const activeInstructor = lockedInstructor || instructorFilter || knownInstructorIds[0] || "";
+  // Admin: "all" view shows global data; instructors are locked to their own.
+  const activeInstructor = lockedInstructor || instructorFilter;
+  const isGlobalView = isAdmin && !activeInstructor;
 
   const activeProfile = useMemo(
     () => allInstructors.find((i) => i.username === activeInstructor),
     [allInstructors, activeInstructor]
   );
 
-  const displayName = activeProfile?.display_name || session?.displayName || activeInstructor || "Admin";
+  const displayName =
+    activeProfile?.display_name ||
+    session?.displayName ||
+    (isAdmin ? `Admin ${session?.username ?? ""}`.trim() : activeInstructor) ||
+    "Admin";
 
-  // Today's attendance + roster counts
+  // Today's attendance + roster counts (per active instructor, or global for admin all-view)
   useEffect(() => {
-    if (!activeInstructor) {
-      setTodayPresentCount(0);
-      setRosterCount(0);
-      return;
-    }
     (async () => {
+      if (isGlobalView) {
+        const [att, roster] = await Promise.all([
+          supabase.from("daily_attendance").select("id", { count: "exact", head: true })
+            .eq("date", today).eq("status", "Present"),
+          supabase.from("students_master").select("id", { count: "exact", head: true }),
+        ]);
+        setTodayPresentCount(att.count ?? 0);
+        setRosterCount(roster.count ?? 0);
+        return;
+      }
+      if (!activeInstructor) {
+        setTodayPresentCount(0);
+        setRosterCount(0);
+        return;
+      }
       const [att, roster] = await Promise.all([
         supabase.from("daily_attendance").select("id", { count: "exact", head: true })
           .eq("instructor_id", activeInstructor).eq("date", today).eq("status", "Present"),
@@ -169,21 +152,21 @@ const Dashboard = () => {
       setTodayPresentCount(att.count ?? 0);
       setRosterCount(roster.count ?? 0);
     })();
-  }, [activeInstructor, today]);
+  }, [activeInstructor, today, isGlobalView]);
 
   const filteredFeedback = useMemo(
-    () => allFeedback.filter((f) => (activeInstructor ? f.session_id.startsWith(activeInstructor) : true)),
-    [allFeedback, activeInstructor]
+    () => isGlobalView
+      ? allFeedback
+      : allFeedback.filter((f) => activeInstructor ? f.session_id.startsWith(activeInstructor) : false),
+    [allFeedback, activeInstructor, isGlobalView]
   );
 
-  // Split tickers by AI score band as a proxy for category
-  // (category is also stored in localStorage on the student device, but the dashboard
-  // can't see that — so we infer: high-score + low-rating-text → improvement)
+  // Categorize using AI score + sentiment proxy. High score + healthy ratings = appreciation.
   const appreciationFeedback = useMemo(
     () =>
       filteredFeedback
-        .filter((f) => (f.ai_score ?? 0) >= 80 && f.understanding_rating + f.instructor_rating >= 8)
-        .slice(0, 12),
+        .filter((f) => (f.ai_score ?? 0) >= 75 && f.understanding_rating + f.instructor_rating >= 8)
+        .slice(0, 50),
     [filteredFeedback]
   );
 
@@ -191,20 +174,20 @@ const Dashboard = () => {
     () =>
       filteredFeedback
         .filter((f) => (f.ai_score ?? 0) >= 75 && f.understanding_rating + f.instructor_rating < 8)
-        .slice(0, 12),
+        .slice(0, 50),
     [filteredFeedback]
-  );
-
-  const streaks = useMemo(
-    () => (activeInstructor ? computeStreaks(allFeedback, activeInstructor) : []),
-    [allFeedback, activeInstructor]
   );
 
   const attendancePct = rosterCount > 0
     ? Math.round((todayPresentCount / rosterCount) * 100)
     : 0;
 
-  // Now safe to early-return — all hooks have been called above.
+  // Distinct students who've ever submitted
+  const totalStudents = useMemo(
+    () => new Set(filteredFeedback.map((f) => f.student_id)).size,
+    [filteredFeedback]
+  );
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -219,6 +202,15 @@ const Dashboard = () => {
     navigate("/");
   };
 
+  const downloadQr = async () => {
+    if (!activeProfile?.qr_image_url) return toast.error("No custom QR uploaded");
+    const a = document.createElement("a");
+    a.href = activeProfile.qr_image_url;
+    a.download = `${activeProfile.username}_qr.png`;
+    a.target = "_blank";
+    a.click();
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 p-4 sm:p-8">
       <motion.div
@@ -227,23 +219,31 @@ const Dashboard = () => {
         transition={{ duration: 0.5 }}
         className="max-w-6xl mx-auto space-y-6"
       >
+        {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+            <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">
               <BookOpen className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-foreground">
+              <h1 className="text-2xl font-bold text-foreground tracking-tight">
                 Hi {displayName}!
               </h1>
-              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
                 {isAdmin && <Shield className="w-3 h-3 text-primary" />}
                 <span className="capitalize">{session.role}</span>
                 {lockedInstructor && ` · ${lockedInstructor}`}
+                {isGlobalView && " · Global view (all instructors)"}
               </p>
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
+            {!isAdmin && activeProfile?.qr_image_url && (
+              <Button variant="default" size="sm" onClick={() => setQrOpen(true)} className="gap-1.5">
+                <QrCode className="w-4 h-4" />
+                View My QR
+              </Button>
+            )}
             {isAdmin && (
               <Link to="/instructor-qr">
                 <Button variant="outline" size="sm">
@@ -252,7 +252,12 @@ const Dashboard = () => {
                 </Button>
               </Link>
             )}
-            <Button onClick={() => exportInstructorToExcel(allFeedback, activeInstructor)} disabled={!filteredFeedback.length} size="sm">
+            <Button
+              onClick={() => exportInstructorToExcel(allFeedback, activeInstructor)}
+              disabled={!filteredFeedback.length}
+              size="sm"
+              variant="outline"
+            >
               <Download className="w-4 h-4 mr-1.5" />
               Export Excel
             </Button>
@@ -265,13 +270,14 @@ const Dashboard = () => {
 
         {/* Admin: instructor switcher */}
         {isAdmin && knownInstructorIds.length > 0 && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <label className="text-xs font-semibold text-foreground">Viewing instructor:</label>
-            <Select value={activeInstructor} onValueChange={setInstructorFilter}>
-              <SelectTrigger className="h-8 w-[220px] text-xs">
+          <div className="flex items-center gap-2 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
+            <label className="text-xs font-semibold text-foreground">View:</label>
+            <Select value={activeInstructor || "__all__"} onValueChange={(v) => setInstructorFilter(v === "__all__" ? "" : v)}>
+              <SelectTrigger className="h-8 w-[260px] text-xs">
                 <SelectValue placeholder="Choose instructor" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="__all__">🌐 All instructors (global)</SelectItem>
                 {knownInstructorIds.map((id) => {
                   const prof = allInstructors.find((p) => p.username === id);
                   return (
@@ -285,13 +291,13 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Glassmorphism stat cards */}
+        {/* Stat cards with rolling counters */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
             { icon: MessageSquare, label: "Total Responses", value: filteredFeedback.length, suffix: "" },
-            { icon: Users, label: "Students", value: streaks.length, suffix: "" },
-            { icon: Percent, label: "Attendance %", value: attendancePct, suffix: "%" },
-            { icon: Flame, label: "Best Streak", value: streaks.length ? streaks[0].currentStreak : 0, suffix: "" },
+            { icon: Users, label: "Students", value: totalStudents, suffix: "" },
+            { icon: Percent, label: "Attendance Today", value: attendancePct, suffix: "%" },
+            { icon: CheckCircle2, label: "Present Today", value: todayPresentCount, suffix: "" },
           ].map(({ icon: Icon, label, value, suffix }, idx) => (
             <motion.div
               key={label}
@@ -299,49 +305,47 @@ const Dashboard = () => {
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: idx * 0.07, type: "spring", stiffness: 220, damping: 22 }}
               whileHover={{ y: -3 }}
-              className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-4 text-center space-y-1 shadow-[0_8px_32px_-12px_hsl(var(--primary)/0.18)]"
+              className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5 text-center space-y-1.5 shadow-[0_8px_32px_-12px_hsl(var(--primary)/0.18)]"
             >
               <Icon className="w-5 h-5 text-primary mx-auto" />
               <p className="text-3xl font-bold text-foreground tabular-nums">
                 <RollingNumber value={value} />
                 {suffix && <span className="text-2xl">{suffix}</span>}
               </p>
-              <p className="text-xs text-muted-foreground">{label}</p>
+              <p className="text-xs text-muted-foreground font-medium">{label}</p>
             </motion.div>
           ))}
         </div>
 
-        {/* Trend chart + dual tickers */}
+        {/* Two simple list views (no charts) */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <FeedbackTrendChart feedback={filteredFeedback} />
-          <div className="grid grid-rows-2 gap-3">
-            <CategoryTicker items={appreciationFeedback} variant="appreciation" />
-            <CategoryTicker items={improvementFeedback} variant="improvement" />
-          </div>
+          <CategoryList items={appreciationFeedback} variant="appreciation" />
+          <CategoryList items={improvementFeedback} variant="improvement" />
         </div>
 
         <Tabs defaultValue="attendance" className="space-y-4">
           <TabsList>
             <TabsTrigger value="attendance">
-              <ListChecks className="w-3.5 h-3.5 mr-1" />
-              Live Attendance
+              <ListChecks className="w-3.5 h-3.5 mr-1.5" />
+              Attendance Roster
             </TabsTrigger>
-            <TabsTrigger value="responses">Responses</TabsTrigger>
-            <TabsTrigger value="streaks">Streaks</TabsTrigger>
-            <TabsTrigger value="admin">
-              <KeyRound className="w-3.5 h-3.5 mr-1" />
-              Admin
-            </TabsTrigger>
+            <TabsTrigger value="responses">All Responses</TabsTrigger>
             {isAdmin && (
               <TabsTrigger value="data">
-                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />
+                <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5" />
                 Data Mgmt
               </TabsTrigger>
             )}
           </TabsList>
 
           <TabsContent value="attendance">
-            <RosterAttendanceTable instructorId={activeInstructor} />
+            {isGlobalView ? (
+              <div className="text-center py-12 text-sm text-muted-foreground border border-border/40 rounded-xl bg-card/40">
+                Pick a specific instructor to manage their attendance roster.
+              </div>
+            ) : (
+              <RosterAttendanceTable instructorId={activeInstructor} />
+            )}
           </TabsContent>
 
           <TabsContent value="responses">
@@ -355,96 +359,79 @@ const Dashboard = () => {
                   <TableHeader>
                     <TableRow>
                       <TableHead>NIAT ID</TableHead>
+                      {isGlobalView && <TableHead>Instructor</TableHead>}
                       <TableHead>Date</TableHead>
                       <TableHead className="text-center">Understanding</TableHead>
-                      <TableHead className="text-center">Instructor</TableHead>
+                      <TableHead className="text-center">Teaching</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead className="text-center">AI Score</TableHead>
-                      <TableHead className="text-center">Attendance</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredFeedback.map((fb) => (
-                      <TableRow key={fb.id}>
-                        <TableCell className="font-medium font-mono text-xs">{fb.student_id}</TableCell>
-                        <TableCell className="text-muted-foreground text-xs">
-                          {new Date(fb.created_at).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="text-center">{fb.understanding_rating}⭐</TableCell>
-                        <TableCell className="text-center">{fb.instructor_rating}⭐</TableCell>
-                        <TableCell className="max-w-[200px] truncate text-xs">{fb.description}</TableCell>
-                        <TableCell className="text-center">
-                          <span className={`text-xs font-medium ${(fb.ai_score ?? 0) >= 75 ? "text-success" : "text-warning"}`}>
-                            {fb.ai_score ?? "—"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {fb.attendance_marked ? (
-                            <CheckCircle2 className="w-4 h-4 text-success mx-auto" />
-                          ) : (
-                            <span className="text-xs text-destructive">✗</span>
+                    {[...filteredFeedback]
+                      .sort((a, b) => naturalSort(a.student_id, b.student_id))
+                      .map((fb) => (
+                        <TableRow key={fb.id}>
+                          <TableCell className="font-medium font-mono text-xs">{fb.student_id}</TableCell>
+                          {isGlobalView && (
+                            <TableCell className="text-xs text-muted-foreground">
+                              {fb.session_id.split("_")[0]}
+                            </TableCell>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          <TableCell className="text-muted-foreground text-xs">
+                            {new Date(fb.created_at).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="text-center text-sm">{fb.understanding_rating}⭐</TableCell>
+                          <TableCell className="text-center text-sm">{fb.instructor_rating}⭐</TableCell>
+                          <TableCell className="max-w-[260px] truncate text-xs">{fb.description}</TableCell>
+                          <TableCell className="text-center">
+                            <span className={`text-xs font-semibold ${(fb.ai_score ?? 0) >= 75 ? "text-success" : "text-warning"}`}>
+                              {fb.ai_score ?? "—"}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
-              </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="streaks">
-            {streaks.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-12">No attendance data yet.</p>
-            ) : (
-              <div className="border border-border rounded-xl overflow-hidden bg-card/60 backdrop-blur-xl">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>NIAT ID</TableHead>
-                      <TableHead className="text-center">Total Sessions</TableHead>
-                      <TableHead className="text-center">Current Streak 🔥</TableHead>
-                      <TableHead>Dates Attended</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {streaks.map((s) => (
-                      <TableRow key={s.student_id}>
-                        <TableCell className="font-medium font-mono text-xs">{s.student_id}</TableCell>
-                        <TableCell className="text-center">{s.totalSessions}</TableCell>
-                        <TableCell className="text-center">
-                          <span className="inline-flex items-center gap-1">
-                            {s.currentStreak}
-                            {s.currentStreak >= 3 && <Flame className="w-4 h-4 text-warning" />}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground max-w-[250px] truncate">
-                          {s.dates.join(", ")}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="admin" className="space-y-8">
-            <SessionCodeAdmin instructorId={activeInstructor} />
-            {isMasterAdmin && (
-              <div className="border-t border-border pt-6">
-                <CoAdminPinAdmin />
               </div>
             )}
           </TabsContent>
 
           {isAdmin && (
             <TabsContent value="data" className="space-y-6">
-              <BulkStudentUpload defaultInstructorId={activeInstructor} />
+              <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
+                <BulkStudentUpload defaultInstructorId={activeInstructor} />
+              </div>
             </TabsContent>
           )}
         </Tabs>
       </motion.div>
+
+      {/* QR modal for instructor */}
+      <Dialog open={qrOpen} onOpenChange={setQrOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ImageIcon className="w-4 h-4 text-primary" />
+              Your Session QR
+            </DialogTitle>
+          </DialogHeader>
+          {activeProfile?.qr_image_url ? (
+            <div className="space-y-3">
+              <div className="bg-white p-4 rounded-xl flex items-center justify-center">
+                <img src={activeProfile.qr_image_url} alt="Your session QR" className="max-h-80 object-contain" />
+              </div>
+              <Button onClick={downloadQr} className="w-full gap-2">
+                <Download className="w-4 h-4" /> Download QR
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              You haven't uploaded a custom QR. Re-register at /setup to add one.
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
