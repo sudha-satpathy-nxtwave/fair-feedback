@@ -392,7 +392,7 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} />
+              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} />
             )}
           </TabsContent>
 
