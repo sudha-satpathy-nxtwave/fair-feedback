@@ -318,6 +318,27 @@ const Dashboard = () => {
           </div>
         )}
 
+        {/* Section selector — drives roster + stat cards */}
+        {(activeInstructor || isGlobalView) && (
+          <div className="flex items-center gap-2 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
+            <label className="text-xs font-semibold text-foreground">Section:</label>
+            <Select value={selectedSection} onValueChange={setSelectedSection}>
+              <SelectTrigger className="h-8 w-[220px] text-xs">
+                <SelectValue placeholder="Choose section" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sections</SelectItem>
+                {availableSections.map((s) => (
+                  <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {availableSections.length === 0 && (
+              <span className="text-xs text-muted-foreground">No sections in roster yet</span>
+            )}
+          </div>
+        )}
+
         {/* Stat cards with rolling counters */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
