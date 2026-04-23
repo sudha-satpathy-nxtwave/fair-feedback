@@ -31,6 +31,8 @@ interface Props {
   instructorId?: string;
   /** Optional — when set, the section filter is controlled by the parent and the internal selector is hidden. */
   sectionFilter?: string;
+  /** Optional — YYYY-MM-DD; when set, the table shows attendance for that date instead of today. */
+  dateFilter?: string;
 }
 
 /** Numeric-aware sort: NW0001 < NW0002 < NW0010 */
