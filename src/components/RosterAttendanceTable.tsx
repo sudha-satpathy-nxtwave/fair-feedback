@@ -40,7 +40,7 @@ function naturalSort(a: string, b: string) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
-const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
+const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter }: Props) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Map<string, AttendanceRecord>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -48,7 +48,8 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const today = getLocalDateString();
+  const today = dateFilter || getLocalDateString();
+  const isToday = today === getLocalDateString();
   // When parent controls the section, use that; otherwise fall back to internal selector.
   const isControlled = sectionFilter !== undefined;
   const section = isControlled ? (sectionFilter || "all") : internalSection;
@@ -75,7 +76,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instructorId]);
+  }, [instructorId, today]);
 
   const sections = useMemo(
     () => [...new Set(students.map((s) => s.section).filter(Boolean))].sort(naturalSort),
