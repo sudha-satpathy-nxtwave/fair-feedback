@@ -473,6 +473,9 @@ const Dashboard = () => {
           {isAdmin && (
             <TabsContent value="data" className="space-y-6">
               <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
+                <InstructorAdminList />
+              </div>
+              <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
                 <BulkStudentUpload defaultInstructorId={activeInstructor} />
               </div>
             </TabsContent>
