@@ -86,7 +86,10 @@ const Dashboard = () => {
   const [selectedSection, setSelectedSection] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>(today);
 
+const normalize = (str: string = "") =>
+  str.toLowerCase().replace("section", "").trim();
   // Load instructor profiles
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase
@@ -148,9 +151,11 @@ const Dashboard = () => {
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
       setAvailableSections(sections);
 
-      const sectionFilteredStudents = selectedSection === "all"
-        ? rows
-        : rows.filter((r) => r.section === selectedSection);
+const sectionFilteredStudents = selectedSection === "all"
+  ? rows
+  : rows.filter(
+      (r) => normalize(r.section) === normalize(selectedSection)
+    );
       setRosterCount(sectionFilteredStudents.length);
 
       const studentIds = sectionFilteredStudents.map((r) => r.student_id);
@@ -202,10 +207,7 @@ const Dashboard = () => {
     : 0;
 
   // Distinct students who've ever submitted
-  const totalStudents = useMemo(
-    () => new Set(filteredFeedback.map((f) => f.student_id)).size,
-    [filteredFeedback]
-  );
+  const totalStudents = rosterCount;
 
   if (authLoading) {
     return (
