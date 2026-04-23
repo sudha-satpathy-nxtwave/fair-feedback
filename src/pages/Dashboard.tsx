@@ -369,8 +369,8 @@ const Dashboard = () => {
           {[
             { icon: MessageSquare, label: "Total Responses", value: filteredFeedback.length, suffix: "" },
             { icon: Users, label: "Students", value: totalStudents, suffix: "" },
-            { icon: Percent, label: "Attendance Today", value: attendancePct, suffix: "%" },
-            { icon: CheckCircle2, label: "Present Today", value: todayPresentCount, suffix: "" },
+            { icon: Percent, label: selectedDate === today ? "Attendance Today" : `Attendance ${selectedDate}`, value: attendancePct, suffix: "%" },
+            { icon: CheckCircle2, label: selectedDate === today ? "Present Today" : "Present", value: todayPresentCount, suffix: "" },
           ].map(({ icon: Icon, label, value, suffix }, idx) => (
             <motion.div
               key={label}
@@ -417,7 +417,8 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} />
+              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} dateFilter={selectedDate} />)
+}
             )}
           </TabsContent>
 
