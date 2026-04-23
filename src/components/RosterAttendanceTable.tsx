@@ -220,12 +220,15 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter }: Prop
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={busyId === s.student_id}
+                      disabled={busyId === s.student_id || !isToday}
                       onClick={() => toggleStatus(s)}
                       className="h-7 text-xs"
+                      title={!isToday ? "Past dates are read-only" : ""}
                     >
                       {busyId === s.student_id ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : !isToday ? (
+                        "—"
                       ) : isPresent ? (
                         "Mark Absent"
                       ) : (
