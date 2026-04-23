@@ -31,6 +31,8 @@ interface Props {
   instructorId?: string;
   /** Optional — when set, the section filter is controlled by the parent and the internal selector is hidden. */
   sectionFilter?: string;
+  /** Optional — YYYY-MM-DD; when set, the table shows attendance for that date instead of today. */
+  dateFilter?: string;
 }
 
 /** Numeric-aware sort: NW0001 < NW0002 < NW0010 */
@@ -38,7 +40,7 @@ function naturalSort(a: string, b: string) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
-const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
+const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter }: Props) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Map<string, AttendanceRecord>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -46,7 +48,8 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const today = getLocalDateString();
+  const today = dateFilter || getLocalDateString();
+  const isToday = today === getLocalDateString();
   // When parent controls the section, use that; otherwise fall back to internal selector.
   const isControlled = sectionFilter !== undefined;
   const section = isControlled ? (sectionFilter || "all") : internalSection;
@@ -73,7 +76,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instructorId]);
+  }, [instructorId, today]);
 
   const sections = useMemo(
     () => [...new Set(students.map((s) => s.section).filter(Boolean))].sort(naturalSort),
@@ -158,7 +161,8 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-muted-foreground">
-          <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present today ({today})
+          <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present
+          {isToday ? " today" : ""} ({today}){!isToday && <span className="ml-1 text-warning">· read-only past date</span>}
         </div>
         <div className="flex gap-2">
           {!isControlled && sections.length > 0 && (
@@ -216,12 +220,15 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter }: Props) => {
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={busyId === s.student_id}
+                      disabled={busyId === s.student_id || !isToday}
                       onClick={() => toggleStatus(s)}
                       className="h-7 text-xs"
+                      title={!isToday ? "Past dates are read-only" : ""}
                     >
                       {busyId === s.student_id ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : !isToday ? (
+                        "—"
                       ) : isPresent ? (
                         "Mark Absent"
                       ) : (
