@@ -18,6 +18,8 @@ import RosterAttendanceTable from "@/components/RosterAttendanceTable";
 import RollingNumber from "@/components/RollingNumber";
 import CategoryList from "@/components/CategoryList";
 import BulkStudentUpload from "@/components/BulkStudentUpload";
+import InstructorAdminList from "@/components/InstructorAdminList";
+import { Input } from "@/components/ui/input";
 import { getLocalDateString } from "@/lib/dateUtils";
 import { toast } from "sonner";
 
@@ -82,6 +84,7 @@ const Dashboard = () => {
   const [qrOpen, setQrOpen] = useState(false);
   const [availableSections, setAvailableSections] = useState<string[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>("all");
+  const [selectedDate, setSelectedDate] = useState<string>(today);
 
   // Load instructor profiles
   useEffect(() => {
