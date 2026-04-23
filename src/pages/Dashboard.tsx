@@ -173,7 +173,7 @@ const Dashboard = () => {
       let attQuery = supabase
         .from("daily_attendance")
         .select("id", { count: "exact", head: true })
-        .eq("date", today)
+        .eq("date", selectedDate)
         .eq("status", "Present")
         .in("student_id", studentIds);
       if (!isGlobalView && activeInstructor) {
@@ -182,7 +182,7 @@ const Dashboard = () => {
       const { count } = await attQuery;
       setTodayPresentCount(count ?? 0);
     })();
-  }, [activeInstructor, today, isGlobalView, selectedSection]);
+  }, [activeInstructor, today, isGlobalView, selectedSection, selectedDate]);
 
   const filteredFeedback = useMemo(
     () => isGlobalView
@@ -321,21 +321,43 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Section selector — drives roster + stat cards */}
+        {/* Section + Date filters — drive roster + stat cards */}
         {(activeInstructor || isGlobalView) && (
-          <div className="flex items-center gap-2 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
-            <label className="text-xs font-semibold text-foreground">Section:</label>
-            <Select value={selectedSection} onValueChange={setSelectedSection}>
-              <SelectTrigger className="h-8 w-[220px] text-xs">
-                <SelectValue placeholder="Choose section" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All sections</SelectItem>
-                {availableSections.map((s) => (
-                  <SelectItem key={s} value={s}>Section {s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex items-center gap-3 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-foreground">Section:</label>
+              <Select value={selectedSection} onValueChange={setSelectedSection}>
+                <SelectTrigger className="h-8 w-[200px] text-xs">
+                  <SelectValue placeholder="Choose section" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sections</SelectItem>
+                  {availableSections.map((s) => (
+                    <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-foreground">Date:</label>
+              <Input
+                type="date"
+                value={selectedDate}
+                max={today}
+                onChange={(e) => setSelectedDate(e.target.value || today)}
+                className="h-8 w-[160px] text-xs"
+              />
+              {selectedDate !== today && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedDate(today)}
+                  className="h-8 text-xs"
+                >
+                  Today
+                </Button>
+              )}
+            </div>
             {availableSections.length === 0 && (
               <span className="text-xs text-muted-foreground">No sections in roster yet</span>
             )}
