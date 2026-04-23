@@ -49,18 +49,19 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Load full roster once for this instructor — used for both section list & NIAT dropdown.
+  // Load the global master roster (uploaded by admin via CSV).
+  // The roster is shared across all instructors, so we do NOT filter by instructor_id here.
   useEffect(() => {
     (async () => {
       setRosterLoading(true);
       const { data } = await supabase
         .from("students_master")
         .select("student_id, name, section")
-        .eq("instructor_id", instructorId);
+        .order("student_id");
       setRoster((data ?? []) as RosterRow[]);
       setRosterLoading(false);
     })();
-  }, [instructorId]);
+  }, []);
 
   const sections = [...new Set(roster.map((r) => r.section).filter(Boolean))].sort(naturalSort);
 
