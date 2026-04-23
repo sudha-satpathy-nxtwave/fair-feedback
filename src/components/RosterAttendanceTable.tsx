@@ -161,7 +161,8 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter }: Prop
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-muted-foreground">
-          <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present today ({today})
+          <span className="font-semibold text-foreground">{presentCount}</span> / {visible.length} present
+          {isToday ? " today" : ""} ({today}){!isToday && <span className="ml-1 text-warning">· read-only past date</span>}
         </div>
         <div className="flex gap-2">
           {!isControlled && sections.length > 0 && (
