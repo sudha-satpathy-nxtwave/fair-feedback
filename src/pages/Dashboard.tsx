@@ -135,25 +135,14 @@ const Dashboard = () => {
     setSelectedSection("all");
   }, [activeInstructor, isGlobalView]);
 
-  // Load available sections + section-aware roster/attendance counts
+  // Load available sections + section-aware roster/attendance counts.
+  // students_master is the SHARED master roster (admin-uploaded CSV) — every
+  // instructor sees all sections. Attendance records stay scoped per instructor.
   useEffect(() => {
     (async () => {
-      // Build the base scope for roster (by instructor unless admin global view)
-      const rosterBase = supabase.from("students_master").select("section, student_id");
-      const rosterScoped = isGlobalView
-        ? rosterBase
-        : activeInstructor
-          ? rosterBase.eq("instructor_id", activeInstructor)
-          : null;
-
-      if (!rosterScoped) {
-        setAvailableSections([]);
-        setTodayPresentCount(0);
-        setRosterCount(0);
-        return;
-      }
-
-      const { data: rosterRows } = await rosterScoped;
+      const { data: rosterRows } = await supabase
+        .from("students_master")
+        .select("section, student_id");
       const rows = (rosterRows ?? []) as { section: string; student_id: string }[];
       const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));

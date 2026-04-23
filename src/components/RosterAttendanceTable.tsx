@@ -56,12 +56,14 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter }: Prop
 
   const refresh = async () => {
     setLoading(true);
-    const stuQuery = supabase.from("students_master").select("*");
-    const attQuery = supabase.from("daily_attendance").select("*").eq("date", today);
-
+    // Students table is a SHARED master roster (admin uploads CSV once).
+    // We never filter students by instructor_id — every instructor sees all sections.
+    // Attendance records stay scoped per instructor so marks don't collide.
     const [stuRes, attRes] = await Promise.all([
-      instructorId ? stuQuery.eq("instructor_id", instructorId) : stuQuery,
-      instructorId ? attQuery.eq("instructor_id", instructorId) : attQuery,
+      supabase.from("students_master").select("*"),
+      instructorId
+        ? supabase.from("daily_attendance").select("*").eq("date", today).eq("instructor_id", instructorId)
+        : supabase.from("daily_attendance").select("*").eq("date", today),
     ]);
 
     if (stuRes.data) setStudents(stuRes.data as Student[]);
