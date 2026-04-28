@@ -1,0 +1,1 @@
+ALTER TABLE public.attendance_feedback ADD COLUMN category TEXT DEFAULT 'improvement' CHECK (category IN ('appreciation', 'improvement', 'reject'));

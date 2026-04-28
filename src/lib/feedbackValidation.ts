@@ -105,12 +105,15 @@ export function getFeedbackCategory(
 ): "appreciation" | "improvement" | "reject" {
   const trimmed = description.trim();
   if (!trimmed || trimmed.toLowerCase() === "na") {
-    return understandingRating === 5 && instructorRating === 5 ? "appreciation" : "improvement";
+    return understandingRating >= 4 && instructorRating >= 4 ? "appreciation" : "improvement";
   }
 
   const sentiment = detectSentiment(trimmed);
-  if (sentiment === "positive") return "appreciation";
+  const avgRating = (understandingRating + instructorRating) / 2;
+
+  if (sentiment === "positive" && avgRating >= 3) return "appreciation";
   if (sentiment === "negative") return "improvement";
+  if (avgRating >= 4) return "appreciation";
   return "improvement";
 }
 

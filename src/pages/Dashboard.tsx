@@ -32,6 +32,7 @@ interface FeedbackRow {
   instructor_rating: number;
   description: string;
   ai_score: number | null;
+  category: string;
   attendance_marked: boolean;
   created_at: string;
 }
@@ -179,11 +180,11 @@ const Dashboard = () => {
     [allFeedback, activeInstructor, isGlobalView]
   );
 
-  // Categorize using AI score + sentiment proxy. High score + healthy ratings = appreciation.
+  // Categorize using stored category from AI or local logic
   const appreciationFeedback = useMemo(
     () =>
       filteredFeedback
-        .filter((f) => getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating) === "appreciation")
+        .filter((f) => (f.category || getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating)) === "appreciation")
         .slice(0, 50),
     [filteredFeedback]
   );
@@ -191,7 +192,7 @@ const Dashboard = () => {
   const improvementFeedback = useMemo(
     () =>
       filteredFeedback
-        .filter((f) => getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating) === "improvement")
+        .filter((f) => (f.category || getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating)) === "improvement")
         .slice(0, 50),
     [filteredFeedback]
   );

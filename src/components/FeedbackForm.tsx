@@ -157,6 +157,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         instructor_rating: instructorRating,
         description: description.trim() || "NA",
         ai_score: finalScore,
+        category: finalCategory,
         attendance_marked: true,
       });
       if (dbError) throw dbError;
