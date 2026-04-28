@@ -111,7 +111,7 @@ export function getFeedbackCategory(
   const sentiment = detectSentiment(trimmed);
   const avgRating = (understandingRating + instructorRating) / 2;
 
-  if (sentiment === "positive" && avgRating >= 3) return "appreciation";
+  if (sentiment === "positive" && avgRating >= 4) return "appreciation";
   if (sentiment === "negative") return "improvement";
   if (avgRating >= 4) return "appreciation";
   return "improvement";
