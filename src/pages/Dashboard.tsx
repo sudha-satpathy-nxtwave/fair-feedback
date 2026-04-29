@@ -21,7 +21,7 @@ import BulkStudentUpload from "@/components/BulkStudentUpload";
 import InstructorAdminList from "@/components/InstructorAdminList";
 import { Input } from "@/components/ui/input";
 import { getLocalDateString } from "@/lib/dateUtils";
-import { getFeedbackCategory } from "@/lib/feedbackValidation";
+import { detectSentiment } from "@/lib/feedbackValidation";
 import { toast } from "sonner";
 
 interface FeedbackRow {
@@ -180,11 +180,14 @@ const Dashboard = () => {
     [allFeedback, activeInstructor, isGlobalView]
   );
 
-  // Categorize using stored category from AI or local logic
+  // Categorize based on sentiment of actual descriptions (ignore "NA" or empty)
   const appreciationFeedback = useMemo(
     () =>
       filteredFeedback
-        .filter((f) => (f.category || getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating)) === "appreciation")
+        .filter((f) => {
+          const desc = f.description?.trim();
+          return desc && desc.toLowerCase() !== "na" && detectSentiment(desc) === "positive";
+        })
         .slice(0, 50),
     [filteredFeedback]
   );
@@ -192,7 +195,10 @@ const Dashboard = () => {
   const improvementFeedback = useMemo(
     () =>
       filteredFeedback
-        .filter((f) => (f.category || getFeedbackCategory(f.description, f.understanding_rating, f.instructor_rating)) === "improvement")
+        .filter((f) => {
+          const desc = f.description?.trim();
+          return desc && desc.toLowerCase() !== "na" && detectSentiment(desc) === "negative";
+        })
         .slice(0, 50),
     [filteredFeedback]
   );

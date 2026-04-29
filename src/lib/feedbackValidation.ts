@@ -22,7 +22,7 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(w => w.length > 0).length;
 }
 
-function detectSentiment(text: string): "positive" | "negative" | "neutral" {
+export function detectSentiment(text: string): "positive" | "negative" | "neutral" {
   const lower = text.toLowerCase();
   let positiveScore = 0;
   let negativeScore = 0;
