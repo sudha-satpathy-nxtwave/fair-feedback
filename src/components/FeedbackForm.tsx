@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { hasAlreadySubmitted, recordSubmission, validateFeedback, getFeedbackCategory, scoreFeedback } from "@/lib/feedbackValidation";
+import { validateFeedback, getFeedbackCategory, scoreFeedback } from "@/lib/feedbackValidation";
 import { supabase } from "@/integrations/supabase/client";
 import { getLocalDateString } from "@/lib/dateUtils";
 
@@ -30,11 +30,19 @@ interface RosterRow {
   section: string;
 }
 
+interface Subject {
+  id: string;
+  subject_name: string;
+}
+
 const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const [roster, setRoster] = useState<RosterRow[]>([]);
   const [rosterLoading, setRosterLoading] = useState(true);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [section, setSection] = useState("");
   const [studentId, setStudentId] = useState("");
+  const [subjectId, setSubjectId] = useState("");
   const [understandingRating, setUnderstandingRating] = useState(0);
   const [instructorRating, setInstructorRating] = useState(0);
   const [description, setDescription] = useState("");
@@ -59,6 +67,19 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     })();
   }, []);
 
+  // Load subjects from database
+  useEffect(() => {
+    (async () => {
+      setSubjectsLoading(true);
+      const { data } = await supabase
+        .from("subjects")
+        .select("id, subject_name")
+        .order("subject_name", { ascending: true });
+      setSubjects((data ?? []) as Subject[]);
+      setSubjectsLoading(false);
+    })();
+  }, []);
+
   const sections = [...new Set(roster.map((r) => r.section).filter(Boolean))];
 
   const studentsInSection: StudentOption[] = section
@@ -79,7 +100,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const validation = validateFeedback(understandingRating, instructorRating, description);
   const localCategory = getFeedbackCategory(description, understandingRating, instructorRating);
   const localScore = scoreFeedback(description, understandingRating, instructorRating);
-  const feedbackValid = validation.valid && !ratingViolation && section.trim() !== "" && studentId.trim() !== "" && understandingRating > 0 && instructorRating > 0;
+  const feedbackValid = validation.valid && !ratingViolation && section.trim() !== "" && studentId.trim() !== "" && subjectId.trim() !== "" && understandingRating > 0 && instructorRating > 0;
 
   const canSubmit = !loading && !aiLoading && feedbackValid && (bothFive || description.trim());
 
@@ -124,6 +145,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
     if (!trimmedSection) return setError("Please select your section.");
     if (!trimmedId) return setError("Please select your NIAT ID from the list.");
+    if (!subjectId) return setError("Please select a subject.");
     if (ratingViolation) return setError("Understanding rating can't be higher than the Teaching rating.");
     if (understandingRating === 0 || instructorRating === 0) return setError("Please provide both ratings.");
     if (bothFive && description.trim() && wordCount < 10) {
@@ -132,7 +154,6 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     if (!validation.valid) {
       return setError(validation.error || "Please provide valid feedback.");
     }
-    if (hasAlreadySubmitted(trimmedId, sessionId)) return setError("Attendance already marked for this session.");
 
     // Roster validation (defence in depth — UI already restricts dropdown)
     const inRoster = roster.some(
@@ -145,6 +166,21 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     setLoading(true);
 
     try {
+      // Check for recent submission (database-driven validation)
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const { data: recentFeedback, error: checkError } = await supabase
+        .from("attendance_feedback")
+        .select("id")
+        .eq("student_id", trimmedId)
+        .eq("subject_id", subjectId)
+        .gt("created_at", oneHourAgo)
+        .limit(1);
+
+      if (checkError) throw checkError;
+      if (recentFeedback && recentFeedback.length > 0) {
+        return setError("You have already submitted feedback for this subject within the last hour. Please try again later.");
+      }
+
       const finalScore = aiResult?.score ?? localScore;
       const finalCategory = aiResult?.category ?? localCategory;
       const today = getLocalDateString();
@@ -152,6 +188,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       const baseFeedback = {
         student_id: trimmedId,
         session_id: sessionId,
+        subject_id: subjectId,
         understanding_rating: understandingRating,
         instructor_rating: instructorRating,
         description: description.trim() || "NA",
@@ -174,12 +211,6 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         { onConflict: "student_id,date,instructor_id" }
       );
 
-      // Persist category locally so dashboard can split lists even before the column lands
-      try {
-        localStorage.setItem(`feedback.cat.${trimmedId}.${sessionId}`, finalCategory);
-      } catch { /* ignore */ }
-
-      recordSubmission(trimmedId, sessionId);
       setSuccess(true);
     } catch (e) {
       console.error("Submit error:", e);
@@ -248,17 +279,33 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
           />
         </div>
 
+        <div className="space-y-1.5">
+          <label className="text-sm font-semibold text-foreground">Step 3 — Select Subject</label>
+          <Select value={subjectId} onValueChange={setSubjectId} disabled={subjectsLoading}>
+            <SelectTrigger className="bg-secondary/50 border-border/60 text-base h-11">
+              <SelectValue placeholder={subjectsLoading ? "Loading subjects..." : "Select a subject"} />
+            </SelectTrigger>
+            <SelectContent>
+              {subjects.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.subject_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         <StarRating
           value={instructorRating}
           onChange={setInstructorRating}
-          label="Step 3 — Rate your instructor's teaching today"
+          label="Step 4 — Rate your instructor's teaching today"
         />
 
         <div className="space-y-1">
           <StarRating
             value={understandingRating}
             onChange={setUnderstandingRating}
-            label="Step 4 — Rate your understanding of today's session"
+            label="Step 5 — Rate your understanding of today's session"
           />
           {ratingViolation && (
             <Tooltip open>
@@ -279,7 +326,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
         <div className="space-y-1.5">
           <label htmlFor="description" className="text-sm font-semibold text-foreground">
-            Step 5 — What do you need more to learn better?
+            Step 6 — What do you need more to learn better?
             {bothFive && <span className="text-muted-foreground font-normal ml-1">(optional)</span>}
           </label>
           <Textarea

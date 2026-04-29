@@ -18,6 +18,7 @@ import RosterAttendanceTable from "@/components/RosterAttendanceTable";
 import RollingNumber from "@/components/RollingNumber";
 import CategoryList from "@/components/CategoryList";
 import BulkStudentUpload from "@/components/BulkStudentUpload";
+import BulkSubjectUpload from "@/components/BulkSubjectUpload";
 import InstructorAdminList from "@/components/InstructorAdminList";
 import { Input } from "@/components/ui/input";
 import { getLocalDateString } from "@/lib/dateUtils";
@@ -583,6 +584,9 @@ const Dashboard = () => {
               </div>
               <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
                 <BulkStudentUpload defaultInstructorId={activeInstructor} />
+              </div>
+              <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
+                <BulkSubjectUpload />
               </div>
             </TabsContent>
           )}
