@@ -149,20 +149,26 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       const finalCategory = aiResult?.category ?? localCategory;
       const today = getLocalDateString();
 
-      // Atomic feedback insert
-      const { error: dbError } = await supabase.from("attendance_feedback").insert({
+      const baseFeedback = {
         student_id: trimmedId,
         session_id: sessionId,
         understanding_rating: understandingRating,
         instructor_rating: instructorRating,
         description: description.trim() || "NA",
         ai_score: finalScore,
-        category: finalCategory,
         attendance_marked: true,
-      });
-      if (dbError) throw dbError;
+      };
 
-      // Atomic attendance upsert (feedback submission = attendance marked)
+      // Try category insert when supported, otherwise retry without category.
+      const payloadWithCategory = { ...baseFeedback, category: finalCategory };
+      let { error: dbError } = await supabase.from("attendance_feedback").insert(payloadWithCategory);
+      if (dbError && /column \"category\"/i.test(dbError.message || "")) {
+        const { error: retryError } = await supabase.from("attendance_feedback").insert(baseFeedback);
+        if (retryError) throw retryError;
+      } else if (dbError) {
+        throw dbError;
+      }
+
       await supabase.from("daily_attendance").upsert(
         { student_id: trimmedId, date: today, status: "Present", instructor_id: instructorId },
         { onConflict: "student_id,date,instructor_id" }

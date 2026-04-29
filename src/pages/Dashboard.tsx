@@ -32,7 +32,7 @@ interface FeedbackRow {
   instructor_rating: number;
   description: string;
   ai_score: number | null;
-  category: string;
+  category?: string;
   attendance_marked: boolean;
   created_at: string;
 }
