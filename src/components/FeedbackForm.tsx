@@ -162,7 +162,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       // Try category insert when supported, otherwise retry without category.
       const payloadWithCategory = { ...baseFeedback, category: finalCategory };
       let { error: dbError } = await supabase.from("attendance_feedback").insert(payloadWithCategory);
-      if (dbError && /column \"category\"/i.test(dbError.message || "")) {
+      if (dbError && (dbError.code === "PGRST204" || /category/i.test(dbError.message || ""))) {
         const { error: retryError } = await supabase.from("attendance_feedback").insert(baseFeedback);
         if (retryError) throw retryError;
       } else if (dbError) {
