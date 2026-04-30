@@ -18,6 +18,19 @@ const NEGATIVE_PHRASES = [
   "not good", "disappointing", "slow", "rushed",
 ];
 
+const WEAK_IMPROVEMENT_PHRASES = [
+  "could be better",
+  "something could be better",
+  "needs improvement",
+  "need improvement",
+  "can improve",
+  "could improve",
+  "not bad",
+  "okay",
+  "fine",
+  "more effort",
+];
+
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(w => w.length > 0).length;
 }
@@ -69,9 +82,12 @@ export function validateFeedback(
       return { valid: false, error: "Please provide constructive feedback." };
     }
 
-    // Check word count
-    if (countWords(trimmed) < 10) {
-      return { valid: false, error: "Please write at least 10 words of constructive feedback." };
+    const lower = trimmed.toLowerCase();
+    if (WEAK_IMPROVEMENT_PHRASES.some((phrase) => lower.includes(phrase))) {
+      return {
+        valid: false,
+        error: "Please be specific about what can be improved, not just say it could be better.",
+      };
     }
 
     // Sentiment-rating consistency
@@ -128,7 +144,6 @@ export function scoreFeedback(description: string, understandingRating: number, 
   let score = 60 + Math.min(30, words * 3);
   if (sentiment === "positive") score += 10;
   if (sentiment === "negative") score -= 10;
-  if (words < 10) score -= 15;
   return Math.max(0, Math.min(100, score));
 }
 

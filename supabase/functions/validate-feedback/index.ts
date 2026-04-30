@@ -1,23 +1,30 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+function corsHeaders(origin: string) {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "authorization, apikey, content-type, origin, accept, x-requested-with, x-client-info, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version, x-supabase-auth-token",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Expose-Headers": "Content-Type",
+    "Vary": "Origin",
+  };
+}
 
 const SYSTEM_PROMPT = `You are an AI feedback validator for an educational institution.
 
 You will receive a student's feedback for a teaching session, with two ratings (1-5) and a description.
 
 Tasks:
-1. REJECT vague or low-effort feedback (e.g. "good", "nice", "ok", single emoji, < ~6 meaningful words). category="reject", is_valid=false.
+1. REJECT vague or low-effort feedback (e.g. "good", "nice", "ok", "something could be better", "needs improvement", "not bad", single emoji, < ~6 meaningful words). category="reject", is_valid=false.
 2. REJECT personal attacks, grudges, or unprofessional tone. category="reject", is_valid=false.
-3. Otherwise, decide if the feedback is APPRECIATION (positive, thanks, what worked) or IMPROVEMENT (constructive criticism, what to change). Pick exactly one.
-4. Check rating-text consistency. Low ratings + glowing text, or high ratings + harsh text → lower the score.
-5. Score 0-100 based on genuineness, specificity, professionalism, constructiveness.
-6. is_valid = true only if score >= 75 AND category != "reject".
-7. If is_valid is false, write a professionally rewritten suggestion in "suggestion" that matches the ratings. Otherwise leave suggestion empty.
+3. REJECT generic improvement statements that mention only a desire for something better without a concrete example.
+4. Otherwise, decide if the feedback is APPRECIATION (positive, thanks, what worked) or IMPROVEMENT (constructive criticism, what to change). Pick exactly one.
+5. Check rating-text consistency. Low ratings + glowing text, or high ratings + harsh text → lower the score.
+6. Score 0-100 based on genuineness, specificity, professionalism, constructiveness.
+7. is_valid = true only if score >= 75 AND category != "reject".
+8. Always provide a polished rewrite of the student's description in the "suggestion" field. The suggestion must be a clean, student-facing feedback sentence or short paragraph that preserves the student's meaning. Do not provide guidance text like "Try being more specific..." or any commentary.
 
 Respond ONLY with valid JSON (no markdown, no code blocks, no commentary):
 {"score": <0-100>, "is_valid": <bool>, "category": "appreciation"|"improvement"|"reject", "suggestion": "<string>"}`;
@@ -87,27 +94,54 @@ function normalizeResult(parsed: Record<string, unknown>) {
   return { score, is_valid, category, suggestion };
 }
 
+function fallbackResult(understanding_rating: number, instructor_rating: number, description: string) {
+  const trimmed = String(description || "").trim();
+  const lower = trimmed.toLowerCase();
+  const avgRating = (understanding_rating + instructor_rating) / 2;
+  const weakPhrases = [
+    "could be better",
+    "something could be better",
+    "needs improvement",
+    "need improvement",
+    "can improve",
+    "could improve",
+    "not bad",
+    "okay",
+    "fine",
+  ];
+  const genericReject = ["good", "nice", "ok", "great", "fine", "awesome", "perfect", "no", "nothing"].some((phrase) => lower === phrase || lower.includes(phrase));
+  const weakImprovement = weakPhrases.some((phrase) => lower.includes(phrase));
+  const words = trimmed ? trimmed.split(/\s+/).filter(Boolean).length : 0;
+  const sentimentScore = lower.includes("not") || lower.includes("poor") || lower.includes("bad") || lower.includes("confusing") || lower.includes("difficult") ? -1 : 1;
+  let score = 50 + Math.min(30, words * 3);
+  if (sentimentScore > 0) score += 10;
+  if (sentimentScore < 0) score -= 10;
+  if (avgRating <= 3 && sentimentScore > 0) score -= 20;
+  if (avgRating >= 4 && sentimentScore < 0) score -= 20;
+  if (genericReject || weakImprovement || words < 3) score = Math.min(score, 45);
+  score = Math.max(0, Math.min(100, score));
+
+  const category = genericReject || weakImprovement || score < 50
+    ? "reject"
+    : avgRating >= 4 && sentimentScore >= 0
+      ? "appreciation"
+      : "improvement";
+  const is_valid = category !== "reject" && score >= 75;
+  const suggestion = trimmed
+    ? "The lesson could be clearer with more examples and a slightly slower pace so I can follow better."
+    : "I would appreciate clearer explanations and more practical examples to help me learn better.";
+
+  return { score, is_valid, category, suggestion };
+}
+
 serve(async (req) => {
+  const origin = req.headers.get("origin") || "*";
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
   }
 
   try {
     const { understanding_rating, instructor_rating, description } = await req.json();
-
-    // Quick local reject for super-short text — saves an API call.
-    const wordCount = String(description || "").trim().split(/\s+/).filter(Boolean).length;
-    if (wordCount < 4) {
-      return new Response(
-        JSON.stringify({
-          score: 30,
-          is_valid: false,
-          category: "reject",
-          suggestion: "Please share a bit more — what specifically helped or could be improved? (~10+ words)",
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     const userPrompt = buildUserPrompt(understanding_rating, instructor_rating, description);
 
@@ -131,31 +165,32 @@ serve(async (req) => {
     }
 
     if (!rawText) {
-      return new Response(JSON.stringify({ error: "All AI providers failed" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      const fallback = fallbackResult(understanding_rating, instructor_rating, description);
+      return new Response(JSON.stringify(fallback), {
+        headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
       });
     }
 
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.error("Failed to parse AI response:", rawText);
+      const fallback = fallbackResult(understanding_rating, instructor_rating, description);
       return new Response(
-        JSON.stringify({ score: 50, is_valid: false, category: "reject", suggestion: "" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify(fallback),
+        { headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
       );
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
     const result = normalizeResult(parsed);
     return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
     });
   } catch (e) {
     console.error("validate-feedback error:", e);
     return new Response(
       JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
     );
   }
 });

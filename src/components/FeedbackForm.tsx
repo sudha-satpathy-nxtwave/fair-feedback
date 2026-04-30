@@ -52,6 +52,13 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [hasAnalyzedFeedback, setHasAnalyzedFeedback] = useState(false);
+  const [lastAnalyzedFeedback, setLastAnalyzedFeedback] = useState<{
+    description: string;
+    understandingRating: number;
+    instructorRating: number;
+  } | null>(null);
+  const aiPassed = aiResult?.is_valid ?? false;
 
   // Load the global master roster (uploaded by admin via CSV).
   // The roster is shared across all instructors, so we do NOT filter by instructor_id here.
@@ -95,21 +102,32 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
   const ratingViolation = understandingRating > 0 && instructorRating > 0 && understandingRating > instructorRating;
   const bothFive = understandingRating === 5 && instructorRating === 5;
-  const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
-  const fiveStarTextOk = !description.trim() || wordCount >= 10;
   const validation = validateFeedback(understandingRating, instructorRating, description);
   const localCategory = getFeedbackCategory(description, understandingRating, instructorRating);
   const localScore = scoreFeedback(description, understandingRating, instructorRating);
   const feedbackValid = validation.valid && !ratingViolation && section.trim() !== "" && studentId.trim() !== "" && subjectId.trim() !== "" && understandingRating > 0 && instructorRating > 0;
 
-  const canSubmit = !loading && !aiLoading && feedbackValid && (bothFive || description.trim());
+  const needsAiAnalysis = description.trim() !== "" || !bothFive;
+  const analysisUpToDate =
+    hasAnalyzedFeedback &&
+    aiResult !== null &&
+    lastAnalyzedFeedback !== null &&
+    lastAnalyzedFeedback.description === description.trim() &&
+    lastAnalyzedFeedback.understandingRating === understandingRating &&
+    lastAnalyzedFeedback.instructorRating === instructorRating &&
+    aiResult.score >= 75 &&
+    aiResult.is_valid;
+
+  const canSubmit = !loading && !aiLoading && feedbackValid && (!needsAiAnalysis || analysisUpToDate);
 
   const runAiValidation = useCallback(
     async (text: string, uRating: number, iRating: number) => {
       if (!text.trim() || uRating === 0 || iRating === 0) {
         setAiResult(null);
+        setHasAnalyzedFeedback(false);
         return;
       }
+      setError("");
       setAiLoading(true);
       try {
         const { data, error } = await supabase.functions.invoke("validate-feedback", {
@@ -120,15 +138,19 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
           },
         });
         if (error) throw error;
-        setAiResult(data as AiResult);
+        const result = data as AiResult;
+        setAiResult(result);
+        setHasAnalyzedFeedback(true);
+        setLastAnalyzedFeedback({
+          description: text.trim(),
+          understandingRating: uRating,
+          instructorRating: iRating,
+        });
       } catch (err) {
         console.error("AI validation error:", err);
-        setAiResult({
-          score: localScore,
-          is_valid: validation.valid,
-          category: localCategory,
-          suggestion: validation.valid ? "" : validation.error || "Please provide valid feedback.",
-        });
+        setAiResult(null);
+        setHasAnalyzedFeedback(false);
+        setError("AI analysis failed. Please try again.");
       } finally {
         setAiLoading(false);
       }
@@ -148,11 +170,21 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     if (!subjectId) return setError("Please select a subject.");
     if (ratingViolation) return setError("Understanding rating can't be higher than the Teaching rating.");
     if (understandingRating === 0 || instructorRating === 0) return setError("Please provide both ratings.");
-    if (bothFive && description.trim() && wordCount < 10) {
-      return setError("If you write something for a 5/5 rating, please use at least 10 words.");
-    }
     if (!validation.valid) {
       return setError(validation.error || "Please provide valid feedback.");
+    }
+
+    const needsAiAnalysis = description.trim() !== "" || !bothFive;
+    const analysisUpToDate =
+      hasAnalyzedFeedback &&
+      aiResult !== null &&
+      lastAnalyzedFeedback !== null &&
+      lastAnalyzedFeedback.description === description.trim() &&
+      lastAnalyzedFeedback.understandingRating === understandingRating &&
+      lastAnalyzedFeedback.instructorRating === instructorRating;
+
+    if (needsAiAnalysis && !analysisUpToDate) {
+      return setError("Please analyze your feedback before submitting. The analyzed feedback must score at least 75%.");
     }
 
     // Roster validation (defence in depth — UI already restricts dropdown)
@@ -182,7 +214,6 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       }
 
       const finalScore = aiResult?.score ?? localScore;
-      const finalCategory = aiResult?.category ?? localCategory;
       const today = getLocalDateString();
 
       const baseFeedback = {
@@ -196,13 +227,8 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         attendance_marked: true,
       };
 
-      // Try category insert when supported, otherwise retry without category.
-      const payloadWithCategory = { ...baseFeedback, category: finalCategory };
-      let { error: dbError } = await supabase.from("attendance_feedback").insert(payloadWithCategory);
-      if (dbError && (dbError.code === "PGRST204" || /category/i.test(dbError.message || ""))) {
-        const { error: retryError } = await supabase.from("attendance_feedback").insert(baseFeedback);
-        if (retryError) throw retryError;
-      } else if (dbError) {
+      const { error: dbError } = await supabase.from("attendance_feedback").insert(baseFeedback);
+      if (dbError) {
         throw dbError;
       }
 
@@ -297,14 +323,24 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
         <StarRating
           value={instructorRating}
-          onChange={setInstructorRating}
+          onChange={(value) => {
+            setInstructorRating(value);
+            setAiResult(null);
+            setHasAnalyzedFeedback(false);
+            setLastAnalyzedFeedback(null);
+          }}
           label="Step 4 — Rate your instructor's teaching today"
         />
 
         <div className="space-y-1">
           <StarRating
             value={understandingRating}
-            onChange={setUnderstandingRating}
+            onChange={(value) => {
+              setUnderstandingRating(value);
+              setAiResult(null);
+              setHasAnalyzedFeedback(false);
+              setLastAnalyzedFeedback(null);
+            }}
             label="Step 5 — Rate your understanding of today's session"
           />
           {ratingViolation && (
@@ -333,15 +369,15 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
             id="description"
             placeholder="Share your thoughts on what could help you learn better..."
             value={description}
-            onChange={(e) => { setDescription(e.target.value); setAiResult(null); }}
+            onChange={(e) => {
+              setDescription(e.target.value);
+              setAiResult(null);
+              setHasAnalyzedFeedback(false);
+              setLastAnalyzedFeedback(null);
+            }}
             rows={4}
             className="bg-secondary/50 border-border/60 focus:border-primary text-base resize-none"
           />
-          {bothFive && description.trim() && wordCount < 10 && (
-            <p className="text-xs text-warning flex items-center gap-1">
-              <Info className="w-3 h-3" /> If you write feedback for 5/5, use at least 10 words ({wordCount}/10).
-            </p>
-          )}
         </div>
 
         <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 border border-border/40">
@@ -392,17 +428,21 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
                 </span>
               </div>
 
-              {aiResult.suggestion && !aiPassed && (
+              {aiResult.suggestion && (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground font-medium">AI Suggestion:</p>
-                  <p className="text-sm text-foreground/80 bg-background/50 p-3 rounded-md italic">"{aiResult.suggestion}"</p>
+                  <p className="text-sm text-foreground/80 bg-background/50 p-3 rounded-md italic">{aiResult.suggestion}</p>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      setDescription(aiResult.suggestion);
-                      runAiValidation(aiResult.suggestion, understandingRating, instructorRating);
+                      const suggestion = aiResult.suggestion.trim();
+                      setDescription(suggestion);
+                      setAiResult(null);
+                      setHasAnalyzedFeedback(false);
+                      setLastAnalyzedFeedback(null);
+                      runAiValidation(suggestion, understandingRating, instructorRating);
                     }}
                     className="gap-1.5"
                   >
