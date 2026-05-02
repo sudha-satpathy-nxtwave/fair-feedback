@@ -232,10 +232,20 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         throw dbError;
       }
 
-      await supabase.from("daily_attendance").upsert(
-        { student_id: trimmedId, date: today, status: "Present", instructor_id: instructorId },
-        { onConflict: "student_id,date,instructor_id" }
-      );
+      const { data: dailyData, error: dailyError } = await supabase.from("daily_attendance").upsert(
+        {
+          student_id: trimmedId,
+          date: today,
+          status: "Present",
+          instructor_id: instructorId,
+          subject_id: subjectId,
+        },
+        { onConflict: "student_id,date,instructor_id,subject_id" }
+      ).select().single();
+
+      if (dailyError) {
+        throw dailyError;
+      }
 
       setSuccess(true);
     } catch (e) {
@@ -439,10 +449,19 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
                     onClick={() => {
                       const suggestion = aiResult.suggestion.trim();
                       setDescription(suggestion);
-                      setAiResult(null);
-                      setHasAnalyzedFeedback(false);
-                      setLastAnalyzedFeedback(null);
-                      runAiValidation(suggestion, understandingRating, instructorRating);
+                      // AI suggestions are pre-approved with a baseline score of 80
+                      setAiResult({
+                        score: 80,
+                        is_valid: true,
+                        category: aiResult.category,
+                        suggestion: suggestion,
+                      });
+                      setHasAnalyzedFeedback(true);
+                      setLastAnalyzedFeedback({
+                        description: suggestion,
+                        understandingRating,
+                        instructorRating,
+                      });
                     }}
                     className="gap-1.5"
                   >

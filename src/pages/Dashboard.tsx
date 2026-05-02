@@ -74,9 +74,12 @@ const Dashboard = () => {
   const [dbLoading, setDbLoading] = useState(true);
   const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
+  const [rosterRows, setRosterRows] = useState<{ section: string; student_id: string; original_index?: number }[]>([]);
+  const [subjects, setSubjects] = useState<{ id: string; subject_name: string }[]>([]);
   const [qrOpen, setQrOpen] = useState(false);
   const [availableSections, setAvailableSections] = useState<string[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>("all");
+  const [selectedSubject, setSelectedSubject] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const [qrUploadBusy, setQrUploadBusy] = useState(false);
   const [qrGenerateBusy, setQrGenerateBusy] = useState(false);
@@ -94,6 +97,17 @@ const Dashboard = () => {
         .select("username, display_name, qr_image_url")
         .order("display_name");
       if (data) setAllInstructors(data as InstructorProfile[]);
+    })();
+  }, []);
+
+  // Load subjects
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("subjects")
+        .select("id, subject_name")
+        .order("subject_name");
+      if (data) setSubjects(data);
     })();
   }, []);
 
@@ -130,9 +144,10 @@ const Dashboard = () => {
     (isAdmin ? `Admin ${session?.username ?? ""}`.trim() : activeInstructor) ||
     "Admin";
 
-  // Reset section filter when instructor view changes
+  // Reset section and subject filters when instructor view changes
   useEffect(() => {
     setSelectedSection("all");
+    setSelectedSubject("all");
   }, [activeInstructor, isGlobalView]);
 
   // Load available sections + section-aware roster/attendance counts.
@@ -145,6 +160,7 @@ const Dashboard = () => {
         .select("section, student_id, original_index")
         .order("original_index", { ascending: true });
       const rows = (rosterRows ?? []) as { section: string; student_id: string; original_index?: number }[];
+      setRosterRows(rows);
       const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))];
       setAvailableSections(sections);
 
@@ -155,7 +171,7 @@ const Dashboard = () => {
           );
       setRosterCount(sectionFilteredStudents.length);
 
-      const attendanceQuery = !isGlobalView && activeInstructor
+      let attendanceQuery = !isGlobalView && activeInstructor
         ? supabase
             .from("daily_attendance")
             .select("student_id, status")
@@ -166,19 +182,43 @@ const Dashboard = () => {
             .select("student_id, status")
             .eq("date", selectedDate);
 
+      if (selectedSubject !== "all") {
+        attendanceQuery = attendanceQuery.eq("subject_id", selectedSubject);
+      }
+
       const { data: attendanceRows } = await attendanceQuery;
+      const sectionStudentIds = new Set(sectionFilteredStudents.map(s => s.student_id));
       const count = (attendanceRows ?? []).filter((row: any) => {
-        return row.status === "Present";
+        return row.status === "Present" && sectionStudentIds.has(row.student_id);
       }).length;
       setTodayPresentCount(count);
     })();
   }, [activeInstructor, today, isGlobalView, selectedSection, selectedDate]);
 
   const filteredFeedback = useMemo(
-    () => isGlobalView
-      ? allFeedback
-      : allFeedback.filter((f) => activeInstructor ? f.session_id.startsWith(activeInstructor) : false),
-    [allFeedback, activeInstructor, isGlobalView]
+    () => {
+      let feedback = isGlobalView
+        ? allFeedback
+        : allFeedback.filter((f) => activeInstructor ? f.session_id.startsWith(activeInstructor) : false);
+      
+      // Filter by section if not "all"
+      if (selectedSection !== "all") {
+        const sectionStudentIds = new Set(
+          rosterRows
+            .filter((r) => normalize(r.section) === normalize(selectedSection))
+            .map((r) => r.student_id)
+        );
+        feedback = feedback.filter((f) => sectionStudentIds.has(f.student_id));
+      }
+
+      // Filter by subject if not "all"
+      if (selectedSubject !== "all") {
+        feedback = feedback.filter((f) => f.subject_id === selectedSubject);
+      }
+      
+      return feedback;
+    },
+    [allFeedback, activeInstructor, isGlobalView, selectedSection, rosterRows, selectedSubject]
   );
 
   // Categorize based on sentiment of actual descriptions (ignore "NA" or empty)
@@ -430,7 +470,7 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Section + Date filters — drive roster + stat cards */}
+        {/* Section + Subject + Date filters — drive roster + stat cards */}
         {(activeInstructor || isGlobalView) && (
           <div className="flex items-center gap-3 flex-wrap rounded-xl border border-border/40 bg-card/50 backdrop-blur-xl p-3">
             <div className="flex items-center gap-2">
@@ -443,6 +483,20 @@ const Dashboard = () => {
                   <SelectItem value="all">All sections</SelectItem>
                   {availableSections.map((s) => (
                     <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-foreground">Subject:</label>
+              <Select value={selectedSubject} onValueChange={setSelectedSubject}>
+                <SelectTrigger className="h-8 w-[200px] text-xs">
+                  <SelectValue placeholder="Choose subject" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All subjects</SelectItem>
+                  {subjects.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -526,7 +580,7 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} dateFilter={selectedDate} />
+              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} subjectFilter={selectedSubject} dateFilter={selectedDate} />
             )}
           </TabsContent>
 
