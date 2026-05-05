@@ -80,9 +80,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
         if (!subject) {
           return null;
         }
-        return instructorId
-          ? supabase.from("daily_attendance").select("*").eq("date", today).eq("instructor_id", instructorId).eq("subject_id", subject)
-          : supabase.from("daily_attendance").select("*").eq("date", today).eq("subject_id", subject);
+        return supabase.from("daily_attendance").select("*").eq("date", today).eq("subject_id", subject);
       })(),
     ]);
 
@@ -129,15 +127,20 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   };
 
   const filteredVisible = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const queryStr = searchQuery.trim().toLowerCase();
+    const queries = queryStr ? queryStr.split(',').map(q => q.trim()).filter(Boolean) : [];
     return visible.filter((student) => {
-      if (!subject) return `${student.student_id} ${student.name}`.toLowerCase().includes(query);
+      const studentStr = `${student.student_id} ${student.name}`.toLowerCase();
+      const matchesSearch = queries.length === 0 || queries.some(q => studentStr.includes(q));
+
+      if (!subject) return matchesSearch;
+      
       const att = getAttendanceRecord(student);
       const isPresent = att?.status === "Present";
       if (statusFilter === "present" && !isPresent) return false;
       if (statusFilter === "absent" && isPresent) return false;
-      if (!query) return true;
-      return `${student.student_id} ${student.name}`.toLowerCase().includes(query);
+      
+      return matchesSearch;
     });
   }, [visible, searchQuery, statusFilter, todayAttendance, subject]);
 
@@ -161,7 +164,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
           student_id: student.student_id,
           date: today,
           status: "Present",
-          instructor_id: targetInstructor,
+          instructor_id: `${targetInstructor}_${subject}`,
           subject_id: subject,
         })
         .select()
@@ -274,7 +277,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
             disabled={!subject}
           >
             {copied ? <ClipboardCheck className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
-            {copied ? "Copied!" : "Copy Status Column"}
+            {copied ? "Copied!" : "Copy Attendance Cell"}
           </Button>
         </div>
       </div>

@@ -5,7 +5,7 @@ function corsHeaders(origin: string) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers":
-      "authorization, apikey, content-type, origin, accept, x-requested-with",
+      "authorization, apikey, content-type, origin, accept, x-requested-with, x-client-info",
     "Access-Control-Allow-Credentials": "true",
     "Content-Type": "application/json",
   };
@@ -26,17 +26,17 @@ Your tasks:
    - "reject"
 4. Check rating vs text consistency.
 5. Score feedback from 0–100 based on clarity, usefulness, and professionalism.
-6. is_valid = true ONLY if score >= 75 AND category != "reject".
+6. is_valid = true ONLY if score >= 60 AND category != "reject".
 
-7. VERY IMPORTANT:
-Rewrite the student's feedback into a clear, professional, well-structured sentence.
+7. VERY IMPORTANT: REWRITE SUGGESTION
+If the student's feedback is valid but poorly written, rewrite it into a clear, professional sentence.
+If the student's feedback is vague/rejected, suggest what they SHOULD write about.
 
-Rules for rewriting:
-- Keep the SAME meaning
-- Improve clarity and tone
-- Use mostly different wording
-- Avoid copying full phrases
-- It should sound natural and human-written
+RULES FOR REWRITING:
+- NEVER HALLUCINATE OR ADD NEW COMPLAINTS. If they say "pace needs to be faster", DO NOT add "needs more examples" or say "slower pace". Keep exactly their core meaning, just polish the grammar and tone.
+- If they want it faster, write: "The session's pace could be increased to cover more material effectively."
+- If they want it slower, write: "The session moved a bit too fast; a slightly slower pace would help me follow better."
+- If the feedback is too short/vague (e.g. "NA", "Good"), suggest: "Please provide specific details about what you liked or what could be improved regarding the pace, clarity, or examples."
 
 Return ONLY valid JSON:
 {"score": number, "is_valid": boolean, "category": "appreciation"|"improvement"|"reject", "suggestion": string}

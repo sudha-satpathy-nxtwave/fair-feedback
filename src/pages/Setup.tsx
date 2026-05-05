@@ -141,11 +141,11 @@ const Setup = () => {
 
           <TabsContent value="register" className="space-y-4 pt-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground">Username (unique)</label>
+              <label className="text-xs font-semibold text-foreground">Employee ID (unique)</label>
               <Input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. john-smith"
+                placeholder="e.g. EMP12345"
               />
               {username && (
                 <p className="text-[11px] text-muted-foreground">→ Saved as: <span className="font-mono">{slugify(username)}</span></p>
@@ -190,11 +190,11 @@ const Setup = () => {
 
           <TabsContent value="signin" className="space-y-4 pt-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground">Your Username</label>
+              <label className="text-xs font-semibold text-foreground">Your Employee ID</label>
               <Input
                 value={signinUsername}
                 onChange={(e) => setSigninUsername(e.target.value)}
-                placeholder="e.g. john-smith"
+                placeholder="e.g. EMP12345"
                 onKeyDown={(e) => e.key === "Enter" && handleSignIn()}
               />
             </div>
@@ -203,7 +203,7 @@ const Setup = () => {
               {signinBusy ? "Checking..." : "Continue"}
             </Button>
             <p className="text-[11px] text-muted-foreground text-center">
-              Forgot your username? Ask an admin to look it up in the dashboard.
+              Forgot your Employee ID? Ask an admin to look it up in the dashboard.
             </p>
           </TabsContent>
         </Tabs>

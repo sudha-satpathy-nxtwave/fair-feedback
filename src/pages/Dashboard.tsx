@@ -44,21 +44,96 @@ interface InstructorProfile {
   qr_image_url: string | null;
 }
 
-async function exportInstructorToExcel(feedbacks: FeedbackRow[], instructor: string) {
-  const XLSX = await import("xlsx");
-  const filtered = instructor
-    ? feedbacks.filter((f) => f.session_id.startsWith(instructor.toLowerCase()))
-    : feedbacks;
-  const rows = filtered.map((f) => ({
-      Timestamp: f.created_at,
-      "Rate your understanding of today's session.": f.understanding_rating,
-      "Rate your instructor of their teaching for today's session(pace of teaching, communication & clarity)": f.instructor_rating,
-      "What do you need more to learn better in today's session?": f.description,
-    }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Feedback");
-  XLSX.writeFile(wb, `${instructor || "all"}_feedback_report.xlsx`);
-}
+// ── Admin-level Google Sheet URL card ─────────────────────────────────────────
+const AdminSheetUrlCard = () => {
+  const [configId, setConfigId] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [viewUrl, setViewUrl] = useState("");
+  const [draftWebhook, setDraftWebhook] = useState("");
+  const [draftView, setDraftView] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    supabase
+      .from("admin_config")
+      .select("id, admin_sheet_webhook_url, admin_sheet_view_url")
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setConfigId(data.id);
+          const d = data as { admin_sheet_webhook_url?: string | null; admin_sheet_view_url?: string | null };
+          setWebhookUrl(d.admin_sheet_webhook_url ?? "");
+          setViewUrl(d.admin_sheet_view_url ?? "");
+        }
+      });
+  }, []);
+
+  const save = async () => {
+    if (!configId) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("admin_config")
+      .update({
+        admin_sheet_webhook_url: draftWebhook.trim() || null,
+        admin_sheet_view_url: draftView.trim() || null,
+      } as Record<string, unknown>)
+      .eq("id", configId);
+    setSaving(false);
+    if (error) { toast.error("Failed to save admin sheet URLs"); return; }
+    setWebhookUrl(draftWebhook.trim());
+    setViewUrl(draftView.trim());
+    setEditing(false);
+    toast.success("Admin Google Sheet URLs saved.");
+  };
+
+  return (
+    <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <FileSpreadsheet className="w-4 h-4 text-primary" />
+          Admin Feedback Sheet
+        </h3>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          All feedback responses are sent here with full student details (NIAT ID, Name, Section).
+        </p>
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Webhook URL (Apps Script exec URL)</label>
+            <Input className="h-8 text-xs" placeholder="https://script.google.com/macros/s/.../exec"
+              value={draftWebhook} onChange={(e) => setDraftWebhook(e.target.value)} autoFocus />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">View URL (your Google Sheet browser URL)</label>
+            <Input className="h-8 text-xs" placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+              value={draftView} onChange={(e) => setDraftView(e.target.value)} />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" className="h-8" onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save"}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-8" onClick={() => setEditing(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          {webhookUrl && viewUrl
+            ? <span className="text-xs text-success font-medium">✓ Admin sheet fully configured</span>
+            : webhookUrl || viewUrl
+            ? <span className="text-xs text-warning font-medium">⚠ Both URLs are needed</span>
+            : <span className="text-xs text-muted-foreground italic">No admin sheet configured</span>}
+          <Button size="sm" variant="outline" className="h-7 text-xs"
+            onClick={() => { setDraftWebhook(webhookUrl); setDraftView(viewUrl); setEditing(true); }}>
+            {webhookUrl || viewUrl ? "Edit URLs" : "Set URLs"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const Dashboard = () => {
   const { session, signOut, loading: authLoading } = useLocalAuth();
@@ -79,17 +154,16 @@ const Dashboard = () => {
   const [qrOpen, setQrOpen] = useState(false);
   const [availableSections, setAvailableSections] = useState<string[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>("all");
-  const [selectedSubject, setSelectedSubject] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const [qrUploadBusy, setQrUploadBusy] = useState(false);
   const [qrGenerateBusy, setQrGenerateBusy] = useState(false);
+  const [sheetViewUrl, setSheetViewUrl] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const normalize = (str: string = "") =>
     str.toLowerCase().replace("section", "").trim();
 
   // Load instructor profiles
-
   useEffect(() => {
     (async () => {
       const { data } = await supabase
@@ -99,6 +173,31 @@ const Dashboard = () => {
       if (data) setAllInstructors(data as InstructorProfile[]);
     })();
   }, []);
+
+  // Load the correct Google Sheet view URL for this user
+  useEffect(() => {
+    if (isAdmin) {
+      // Admin: load from admin_config
+      supabase
+        .from("admin_config")
+        .select("admin_sheet_view_url")
+        .limit(1)
+        .maybeSingle()
+        .then(({ data }) => {
+          setSheetViewUrl((data as { admin_sheet_view_url?: string | null })?.admin_sheet_view_url ?? "");
+        });
+    } else if (lockedInstructor) {
+      // Instructor: load from their own profile
+      supabase
+        .from("instructor_profiles")
+        .select("google_sheet_view_url")
+        .eq("username", lockedInstructor)
+        .single()
+        .then(({ data }) => {
+          setSheetViewUrl((data as { google_sheet_view_url?: string | null })?.google_sheet_view_url ?? "");
+        });
+    }
+  }, [isAdmin, lockedInstructor]);
 
   // Load subjects
   useEffect(() => {
@@ -144,10 +243,9 @@ const Dashboard = () => {
     (isAdmin ? `Admin ${session?.username ?? ""}`.trim() : activeInstructor) ||
     "Admin";
 
-  // Reset section and subject filters when instructor view changes
+  // Reset section filter when instructor view changes
   useEffect(() => {
     setSelectedSection("all");
-    setSelectedSubject("all");
   }, [activeInstructor, isGlobalView]);
 
   // Load available sections + section-aware roster/attendance counts.
@@ -171,20 +269,10 @@ const Dashboard = () => {
           );
       setRosterCount(sectionFilteredStudents.length);
 
-      let attendanceQuery = !isGlobalView && activeInstructor
-        ? supabase
-            .from("daily_attendance")
-            .select("student_id, status")
-            .eq("date", selectedDate)
-            .eq("instructor_id", activeInstructor)
-        : supabase
+      let attendanceQuery = supabase
             .from("daily_attendance")
             .select("student_id, status")
             .eq("date", selectedDate);
-
-      if (selectedSubject !== "all") {
-        attendanceQuery = attendanceQuery.eq("subject_id", selectedSubject);
-      }
 
       const { data: attendanceRows } = await attendanceQuery;
       const sectionStudentIds = new Set(sectionFilteredStudents.map(s => s.student_id));
@@ -211,14 +299,9 @@ const Dashboard = () => {
         feedback = feedback.filter((f) => sectionStudentIds.has(f.student_id));
       }
 
-      // Filter by subject if not "all"
-      if (selectedSubject !== "all") {
-        feedback = feedback.filter((f) => f.subject_id === selectedSubject);
-      }
-      
       return feedback;
     },
-    [allFeedback, activeInstructor, isGlobalView, selectedSection, rosterRows, selectedSubject]
+    [allFeedback, activeInstructor, isGlobalView, selectedSection, rosterRows]
   );
 
   // Categorize based on sentiment of actual descriptions (ignore "NA" or empty)
@@ -432,13 +515,21 @@ const Dashboard = () => {
               </Link>
             )}
             <Button
-              onClick={() => exportInstructorToExcel(allFeedback, activeInstructor)}
-              disabled={!filteredFeedback.length}
+              onClick={() => {
+                if (sheetViewUrl) {
+                  window.open(sheetViewUrl, "_blank");
+                } else {
+                  toast.info(isAdmin
+                    ? "Set the Admin Sheet view URL in the Data tab first."
+                    : "Ask your admin to set your Google Sheet view URL."
+                  );
+                }
+              }}
               size="sm"
               variant="outline"
             >
-              <Download className="w-4 h-4 mr-1.5" />
-              Export Excel
+              <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+              Your feedback Responses
             </Button>
             <Button onClick={handleSignOut} variant="ghost" size="sm">
               <LogOut className="w-4 h-4 mr-1.5" />
@@ -483,20 +574,6 @@ const Dashboard = () => {
                   <SelectItem value="all">All sections</SelectItem>
                   {availableSections.map((s) => (
                     <SelectItem key={s} value={s}>Section {s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-foreground">Subject:</label>
-              <Select value={selectedSubject} onValueChange={setSelectedSubject}>
-                <SelectTrigger className="h-8 w-[200px] text-xs">
-                  <SelectValue placeholder="Choose subject" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All subjects</SelectItem>
-                  {subjects.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -554,10 +631,10 @@ const Dashboard = () => {
         </div>
 
         {/* Two simple list views (no charts) */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <CategoryList items={appreciationFeedback} variant="appreciation" />
           <CategoryList items={improvementFeedback} variant="improvement" />
-        </div>
+        </div> */}
 
         <Tabs defaultValue="attendance" className="space-y-4">
           <TabsList>
@@ -580,7 +657,7 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} subjectFilter={selectedSubject} dateFilter={selectedDate} />
+              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} dateFilter={selectedDate} />
             )}
           </TabsContent>
 
@@ -633,6 +710,7 @@ const Dashboard = () => {
 
           {isAdmin && (
             <TabsContent value="data" className="space-y-6">
+              <AdminSheetUrlCard />
               <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5">
                 <InstructorAdminList />
               </div>
