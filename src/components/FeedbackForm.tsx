@@ -60,6 +60,69 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   } | null>(null);
   const aiPassed = aiResult?.is_valid ?? false;
 
+  const buildPolishedSuggestion = (description: string) => {
+    const cleaned = description.trim().replace(/\s+/g, " ");
+    const lower = cleaned.toLowerCase();
+    const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+
+    if (lower.includes("need help") || lower === "help") {
+      return "I need additional assistance to better understand the material.";
+    }
+    if (lower.includes("hands on practice") || lower.includes("hands-on practice") || lower.includes("practice")) {
+      return "I need more hands-on practice to reinforce what we learned in this session.";
+    }
+    if (lower.includes("more examples") || lower.includes("examples")) {
+      return "More examples would help me understand the concepts better and apply them more confidently.";
+    }
+    if (lower.includes("too fast") || lower.includes("fast pace") || lower.includes("speed")) {
+      return "The pace was too fast, so I need the instructor to slow down and explain the concepts more clearly.";
+    }
+    if (lower.includes("confusing") || lower.includes("difficult") || lower.includes("hard")) {
+      return "The session was confusing, so clearer explanations and examples would help me understand it better.";
+    }
+    if (wordCount <= 3) {
+      return "I need clearer guidance and extra support to learn this topic effectively.";
+    }
+
+    const capitalized = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    const result = capitalized.endsWith(".") ? capitalized : `${capitalized}.`;
+    return normalizeTextForComparison(result) === normalizeTextForComparison(cleaned)
+      ? "I need clearer guidance and extra support to learn this topic effectively."
+      : result;
+  };
+
+  const normalizeTextForComparison = (text: string) =>
+    String(text || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const isTooCloseToOriginal = (suggestion: string, description: string) => {
+    const normalizedSuggestion = normalizeTextForComparison(suggestion);
+    const normalizedDescription = normalizeTextForComparison(description);
+    if (!normalizedSuggestion || !normalizedDescription) return false;
+    if (normalizedSuggestion === normalizedDescription) return true;
+
+    const descWords = normalizedDescription.split(" ");
+    const suggestionWords = normalizedSuggestion.split(" ");
+    const overlap = descWords.filter((word) => suggestionWords.includes(word)).length;
+    const overlapRatio = overlap / Math.max(descWords.length, 1);
+    return overlapRatio > 0.6;
+  };
+
+  const normalizeAiSuggestion = (text: string, originalDescription: string) => {
+    const suggestion = String(text || "").trim();
+    const cleanSuggestion = suggestion.toLowerCase().replace(/\s+/g, " ").trim();
+    const cleanOriginal = originalDescription.toLowerCase().replace(/\s+/g, " ").trim();
+    const genericMatch = cleanSuggestion.includes("lesson could be clearer") || cleanSuggestion.includes("slower pace") || (cleanSuggestion.includes("more examples") && cleanSuggestion.includes("follow better"));
+    if (cleanSuggestion === cleanOriginal || genericMatch || isTooCloseToOriginal(suggestion, originalDescription)) {
+      return buildPolishedSuggestion(originalDescription);
+    }
+    return suggestion;
+  };
+
   // Load the global master roster (uploaded by admin via CSV).
   // The roster is shared across all instructors, so we do NOT filter by instructor_id here.
   useEffect(() => {
@@ -139,7 +202,8 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         });
         if (error) throw error;
         const result = data as AiResult;
-        setAiResult(result);
+        const normalizedSuggestion = normalizeAiSuggestion(result.suggestion, text.trim());
+        setAiResult({ ...result, suggestion: normalizedSuggestion });
         setHasAnalyzedFeedback(true);
         setLastAnalyzedFeedback({
           description: text.trim(),
@@ -232,18 +296,25 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         throw dbError;
       }
 
-      const { data: dailyData, error: dailyError } = await supabase.from("daily_attendance").upsert(
-        {
-          student_id: trimmedId,
-          date: today,
-          status: "Present",
-          instructor_id: instructorId,
-          subject_id: subjectId,
-        },
-        { onConflict: "student_id,date,instructor_id,subject_id" }
-      ).select().single();
+      const attendanceRow = {
+        student_id: trimmedId,
+        date: today,
+        status: "Present",
+        instructor_id: instructorId,
+        subject_id: subjectId,
+      };
+
+      const { data: dailyData, error: dailyError } = await supabase
+        .from("daily_attendance")
+        .upsert([attendanceRow], {
+          onConflict: ["student_id", "date", "instructor_id", "subject_id"],
+          returning: "representation",
+        })
+        .select()
+        .single();
 
       if (dailyError) {
+        console.error("Daily attendance upsert failed:", dailyError);
         throw dailyError;
       }
 

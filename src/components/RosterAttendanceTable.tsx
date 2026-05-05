@@ -51,7 +51,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   const [todayAttendance, setTodayAttendance] = useState<Map<string, AttendanceRecord>>(new Map());
   const [loading, setLoading] = useState(true);
   const [internalSection, setInternalSection] = useState<string>("all");
-  const [internalSubject, setInternalSubject] = useState<string>("all");
+  const [internalSubject, setInternalSubject] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -62,7 +62,11 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   // When parent controls the section/subject, use that; otherwise fall back to internal selector.
   const isControlled = sectionFilter !== undefined;
   const section = isControlled ? (sectionFilter || "all") : internalSection;
-  const subject = subjectFilter !== undefined ? (subjectFilter || "all") : internalSubject;
+  const subject = subjectFilter !== undefined
+    ? subjectFilter === "all"
+      ? ""
+      : subjectFilter || ""
+    : internalSubject;
 
   const refresh = async () => {
     setLoading(true);
@@ -73,27 +77,26 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
       supabase.from("students_master").select("*").order("original_index", { ascending: true }),
       supabase.from("subjects").select("id, subject_name").order("subject_name"),
       (() => {
-        let query = instructorId
-          ? supabase.from("daily_attendance").select("*").eq("date", today).eq("instructor_id", instructorId)
-          : supabase.from("daily_attendance").select("*").eq("date", today);
-        if (subject !== "all") {
-          query = query.eq("subject_id", subject);
+        if (!subject) {
+          return null;
         }
-        return query;
+        return instructorId
+          ? supabase.from("daily_attendance").select("*").eq("date", today).eq("instructor_id", instructorId).eq("subject_id", subject)
+          : supabase.from("daily_attendance").select("*").eq("date", today).eq("subject_id", subject);
       })(),
     ]);
 
     if (stuRes.data) setStudents(stuRes.data as Student[]);
     if (subRes.data) setSubjects(subRes.data as Subject[]);
-    if (attRes.data) {
+    if (attRes && attRes.data) {
       const map = new Map<string, AttendanceRecord>();
       for (const r of attRes.data as AttendanceRecord[]) {
-        // Use student_id + subject_id as key for subject-specific attendance
-        // For "all" subjects, we'll check if student has any attendance
-        const key = r.subject_id ? `${r.student_id}_${r.subject_id}` : r.student_id;
+        const key = `${r.student_id}_${r.subject_id}`;
         map.set(key, r);
       }
       setTodayAttendance(map);
+    } else {
+      setTodayAttendance(new Map());
     }
     setLoading(false);
   };
@@ -121,20 +124,14 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   );
 
   const getAttendanceRecord = (student: Student) => {
-    if (subject === "all") {
-      for (const [key, record] of todayAttendance) {
-        if (key.startsWith(student.student_id)) {
-          return record;
-        }
-      }
-      return undefined;
-    }
+    if (!subject) return undefined;
     return todayAttendance.get(`${student.student_id}_${subject}`);
   };
 
   const filteredVisible = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return visible.filter((student) => {
+      if (!subject) return `${student.student_id} ${student.name}`.toLowerCase().includes(query);
       const att = getAttendanceRecord(student);
       const isPresent = att?.status === "Present";
       if (statusFilter === "present" && !isPresent) return false;
@@ -145,7 +142,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   }, [visible, searchQuery, statusFilter, todayAttendance, subject]);
 
   const toggleStatus = async (student: Student) => {
-    if (subject === "all") {
+    if (!subject) {
       toast.error("Please select a specific subject to mark attendance");
       return;
     }
@@ -260,22 +257,33 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
           {subjects.length > 0 && subjectFilter === undefined && (
             <Select value={subject} onValueChange={setInternalSubject}>
               <SelectTrigger className="h-10 w-[180px] text-xs">
-                <SelectValue placeholder="Subject" />
+                <SelectValue placeholder="Select Subject" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All subjects</SelectItem>
                 {subjects.map((s) => (
                   <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           )}
-          <Button size="sm" variant="outline" onClick={copyStatusColumn} className="h-10 gap-1.5 text-xs">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={copyStatusColumn}
+            className="h-10 gap-1.5 text-xs"
+            disabled={!subject}
+          >
             {copied ? <ClipboardCheck className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
             {copied ? "Copied!" : "Copy Status Column"}
           </Button>
         </div>
       </div>
+
+      {!subject && (
+        <div className="rounded-xl border border-border bg-yellow-50 p-4 text-sm text-foreground/90">
+          Please select a subject to view attendance.
+        </div>
+      )}
 
       <div className="border border-border rounded-xl overflow-hidden bg-card/60 backdrop-blur-xl">
         <Table>
@@ -293,9 +301,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
             {filteredVisible.map((s) => {
               const att = getAttendanceRecord(s);
               const isPresent = att?.status === "Present";
-              const subjectName = subject === "all"
-                ? att?.subject_id ? subjects.find(sub => sub.id === att.subject_id)?.subject_name || "—" : "—"
-                : subjects.find(sub => sub.id === subject)?.subject_name || "—";
+              const subjectName = subject ? subjects.find(sub => sub.id === subject)?.subject_name || "—" : "—";
               return (
                 <TableRow key={s.student_id}>
                   <TableCell className="font-medium font-mono text-xs">{s.student_id}</TableCell>
@@ -303,7 +309,11 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
                   <TableCell className="text-xs text-muted-foreground">{s.section || "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{subjectName}</TableCell>
                   <TableCell className="text-center">
-                    {isPresent ? (
+                    {!subject ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted/10 text-muted-foreground text-xs font-medium">
+                        Select a subject
+                      </span>
+                    ) : isPresent ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-success/10 text-success text-xs font-medium">
                         <CheckCircle2 className="w-3 h-3" /> Present
                       </span>
@@ -317,10 +327,10 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={busyId === s.student_id || !isToday || subject === "all"}
+                      disabled={busyId === s.student_id || !isToday || !subject}
                       onClick={() => toggleStatus(s)}
                       className="h-7 text-xs"
-                      title={subject === "all" ? "Select a subject to mark attendance" : !isToday ? "Past dates are read-only" : ""}
+                      title={!subject ? "Select a subject to mark attendance" : !isToday ? "Past dates are read-only" : ""}
                     >
                       {busyId === s.student_id ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
