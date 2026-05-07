@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, AlertCircle, Sparkles, RefreshCw, Lightbulb, Info, CheckCircle2 } from "lucide-react";
 import StarRating from "./StarRating";
@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { supabase } from "@/integrations/supabase/client";
-import { getLocalDateString } from "@/lib/dateUtils";
+import { getLocalDateString, getLocalTimestampString } from "@/lib/dateUtils";
 
 interface FeedbackFormProps {
   sessionId: string;
@@ -27,27 +27,26 @@ interface Subject {
   subject_name: string;
 }
 
-// ─── Purely client-side AI analysis ─────────────────────────────────────────
+// ─── Minimal Fallback Formatter & Analyzer ───────────────────────────────────
 
-const JUNK_INPUTS = new Set([
-  "na", "n/a", "ok", "okay", "good", "nice", "fine", "great", "nothing",
-  "none", "no", "yes", "cool", "awesome", "perfect", "bad", "worst",
-  "not bad", "idk", "same", "all good", "all fine", "no issue", "no issues",
-]);
+function cleanBasicLocal(text: string): string {
+  const t = text.trim();
+  if (!t) return "NA";
 
-function isJunk(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/\.$/, "");
-  return t.length === 0 || JUNK_INPUTS.has(t) || t.length < 8;
-}
+  let result = t.replace(/\s+/g, " ");
+  result = result.charAt(0).toUpperCase() + result.slice(1);
 
-function isTooShort(text: string): boolean {
-  return text.trim().split(/\s+/).filter(Boolean).length < 4;
+  if (!/[.!?]$/.test(result)) {
+    result += ".";
+  }
+
+  return result;
 }
 
 interface LocalAiResult {
   isValid: boolean;
   score: number;
-  category: "appreciation" | "improvement" | "needsWork";
+  category: "appreciation" | "improvement" | "reject";
   rejectionReason: string | null;
   suggestion: string | null;
 }
@@ -58,143 +57,19 @@ function analyzeLocally(
   iRating: number
 ): LocalAiResult {
   const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
-  const words = trimmed.split(/\s+/).filter(Boolean);
+  const words = trimmed.split(/\s+/).filter(Boolean).length;
   const avgRating = (uRating + iRating) / 2;
-
-  // ── Reject: junk or too short ─────────────────────────────────────────────
-  if (isJunk(trimmed)) {
-    // Even for junk, provide a helpful AI suggestion the student can use
-    const avgRating = (uRating + iRating) / 2;
-    const junkSuggestion = avgRating >= 4
-      ? "Today's session was well-organized and the instructor explained the concepts clearly. I was able to follow along and understand the material covered."
-      : "I feel I need more clarity on the topics covered today. I would appreciate additional explanations and more interactive exercises to strengthen my understanding.";
-    return {
-      isValid: false,
-      score: 20,
-      category: "needsWork",
-      rejectionReason:
-        "Your feedback is too vague or too short. Please describe what specifically helped you learn or what needs improvement — or use the AI suggestion below.",
-      suggestion: junkSuggestion,
-    };
-  }
-
-  if (isTooShort(trimmed)) {
-    return {
-      isValid: false,
-      score: 40,
-      category: "needsWork",
-      rejectionReason:
-        "Please write at least one complete sentence so your instructor can understand your feedback clearly.",
-      suggestion: buildSuggestion(trimmed, uRating, iRating),
-    };
-  }
-
-  // ── Score ─────────────────────────────────────────────────────────────────
-  let score = 60;
-  score += Math.min(25, words.length * 2.5); // length bonus up to 25
-  if (/[?.!]/.test(trimmed.slice(-2))) score += 5; // proper punctuation
-  if (trimmed.charAt(0) === trimmed.charAt(0).toUpperCase()) score += 5; // capitalised
-  score = Math.round(Math.min(100, score));
-
-  // ── Category ──────────────────────────────────────────────────────────────
-  const NEGATIVE_SIGNALS = [
-    "confusing", "confused", "unclear", "not clear", "difficult", "hard",
-    "too fast", "fast paced", "couldn't", "could not", "don't understand",
-    "did not understand", "didn't understand", "boring", "audio", "video",
-    "irrelevant", "not useful", "rush", "poor", "bad", "slow down",
-    "more examples", "not helpful", "struggle", "lost", "didn't get",
-    "didn't follow", "couldn't follow",
-  ];
-  const POSITIVE_SIGNALS = [
-    "great", "excellent", "amazing", "well explained", "very clear",
-    "easy to understand", "enjoyed", "helpful", "wonderful", "fantastic",
-    "love", "really good", "very good", "perfectly", "best", "superb",
-  ];
-
-  const hasNegative = NEGATIVE_SIGNALS.some((s) => lower.includes(s));
-  const hasPositive = POSITIVE_SIGNALS.some((s) => lower.includes(s));
-
-  let category: "appreciation" | "improvement" | "needsWork";
-  if (avgRating >= 4 && hasPositive && !hasNegative) {
-    category = "appreciation";
-  } else if (hasNegative || avgRating < 4) {
-    category = "improvement";
-  } else {
-    category = avgRating >= 4 ? "appreciation" : "improvement";
-  }
-
-  // ── Build contextual suggestion based on the student's own words ──────────
-  const suggestion = buildSuggestion(trimmed, uRating, iRating);
+  const cleaned = cleanBasicLocal(trimmed);
 
   return {
-    isValid: score >= 60,
-    score,
-    category,
-    rejectionReason: null,
-    suggestion,
+    isValid: words >= 4,
+    score: Math.min(80, 50 + words * 2),
+    category: avgRating >= 4 ? "appreciation" : "improvement",
+    rejectionReason: words < 4
+      ? "Please write a complete sentence about the session."
+      : null,
+    suggestion: cleaned,
   };
-}
-
-/**
- * Builds a contextual, professional suggestion always grounded in the
- * student's actual words — meaningfully expanded so they can replace theirs.
- */
-function buildSuggestion(text: string, uRating: number, iRating: number): string {
-  const t = text.trim();
-  const lower = t.toLowerCase();
-  const avgRating = (uRating + iRating) / 2;
-
-  // ─── Match keywords from the student's own words and expand them ───────────
-
-  if (lower.includes("audio") || lower.includes("sound") || lower.includes("hear")) {
-    return "The audio quality was unclear during the session. I would appreciate better audio clarity in future classes so I can follow along effectively.";
-  }
-  if (lower.includes("video") || lower.includes("visual") || lower.includes("screen")) {
-    return "The video or screen sharing was hard to follow at times. Clearer visuals would greatly help me stay engaged.";
-  }
-  if (lower.includes("too fast") || lower.includes("fast pace") || lower.includes("rush")) {
-    return "The session moved at a fast pace, which made it challenging to absorb the concepts. Slowing down slightly would improve my understanding.";
-  }
-  if (lower.includes("too slow") || lower.includes("faster") || lower.includes("increase pace")) {
-    return "The session's pace could be increased to cover more material effectively. I am able to follow along well and would prefer a slightly faster progression.";
-  }
-  if (lower.includes("example") || lower.includes("practical") || lower.includes("hands on") || lower.includes("hands-on")) {
-    return "I feel that more practical examples and hands-on exercises would reinforce the concepts taught and make the subject easier to grasp.";
-  }
-  if (lower.includes("confus") || lower.includes("unclear") || lower.includes("not clear")) {
-    return "Some parts of the session were confusing and lacked clarity. I would benefit from a more structured explanation of the topic, ideally with step-by-step breakdowns and opportunities to ask clarifying questions.";
-  }
-  if (lower.includes("difficult") || lower.includes("hard") || lower.includes("struggle") || lower.includes("lost")) {
-    return "I found the content difficult to follow and struggled to keep up during the session. Additional resources, such as notes or a short recap, would help me review and better understand the material.";
-  }
-  if (lower.includes("irrelevant") || lower.includes("not useful") || lower.includes("off topic")) {
-    return "Some of the examples and explanations felt irrelevant to the core topic. I would appreciate content that directly relates to what we are expected to learn, so class time is used most effectively.";
-  }
-  if (lower.includes("boring") || lower.includes("not engaging") || lower.includes("not interesting")) {
-    return "The session felt less engaging than expected. Incorporating interactive activities, real-world use cases, or student participation could make the class more stimulating and improve overall learning.";
-  }
-  if (lower.includes("repeat") || lower.includes("revise") || lower.includes("recap") || lower.includes("review")) {
-    return "I feel a brief revision or recap of the previous session would greatly help in connecting concepts. Dedicating a few minutes at the start of each class to recap key points would improve retention.";
-  }
-  if (lower.includes("doubt") || lower.includes("question") || lower.includes("ask")) {
-    return "There was limited time for students to ask questions and resolve doubts. Allocating dedicated time for Q&A at the end of the session would help address individual learning gaps more effectively.";
-  }
-  if (lower.includes("understand") && avgRating < 4) {
-    return "I had difficulty fully understanding the concepts covered today. I would benefit from additional explanations, simplified breakdowns, and more opportunities to ask questions during the session.";
-  }
-
-  // ─── Appreciation path ─────────────────────────────────────────────────────
-  if (avgRating >= 4) {
-    const polished = t.charAt(0).toUpperCase() + t.slice(1);
-    const punctuated = /[.!?]$/.test(polished) ? polished : polished + ".";
-    return `${punctuated} The session was well-structured and the instructor's teaching approach made the concepts easier to understand. I look forward to more sessions like this.`;
-  }
-
-  // ─── Generic improvement fallback ──────────────────────────────────────────
-  const polished = t.charAt(0).toUpperCase() + t.slice(1);
-  const punctuated = /[.!?]$/.test(polished) ? polished : polished + ".";
-  return `${punctuated} I would appreciate more clarity and a structured approach to make future sessions more effective and engaging.`;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -216,6 +91,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
   const [aiResult, setAiResult] = useState<LocalAiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [correctedFeedback, setCorrectedFeedback] = useState<string>("");
   const [analysedState, setAnalysedState] = useState<{
     description: string;
     uRating: number;
@@ -286,9 +162,8 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const ratingViolation = understandingRating > 0 && instructorRating > 0 && understandingRating > instructorRating;
   const bothFive = understandingRating === 5 && instructorRating === 5;
 
-  // When any rating is < 4, description is mandatory and must pass analysis
-  const anyRatingLow = understandingRating > 0 && instructorRating > 0 && (understandingRating < 4 || instructorRating < 4);
-  const requiresAnalysis = anyRatingLow || (!bothFive && description.trim().length > 0);
+  // Description is optional ONLY if both ratings are 5. Otherwise, description is mandatory and requires AI validation.
+  const requiresAnalysis = !bothFive && understandingRating > 0 && instructorRating > 0;
 
   const analysisUpToDate =
     aiResult !== null &&
@@ -307,53 +182,97 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     understandingRating > 0 &&
     instructorRating > 0 &&
     !ratingViolation &&
-    (!requiresAnalysis || analysisUpToDate) &&
-    (bothFive || description.trim().length > 0 || !anyRatingLow);
+    (bothFive ? true : (description.trim().length > 0 && analysisUpToDate));
 
   // Reset analysis when inputs change
   const resetAnalysis = () => {
     setAiResult(null);
     setAnalysedState(null);
+    setCorrectedFeedback("");
   };
 
-  const runAnalysis = async () => {
-    if (!description.trim() || understandingRating === 0 || instructorRating === 0) return;
+  const runAnalysis = useCallback(async () => {
+    const trimmedDesc = description.trim();
+    if (!trimmedDesc || understandingRating === 0 || instructorRating === 0) return;
     setAiLoading(true);
     setError("");
-    
+
     try {
       const { data, error } = await supabase.functions.invoke("validate-feedback", {
         body: {
           understanding_rating: understandingRating,
           instructor_rating: instructorRating,
-          description: description.trim(),
+          description: trimmedDesc,
         },
       });
-      
+
       if (error || !data) {
         throw new Error(error?.message || "Function returned no data");
       }
-      
+
+      // Store the AI-corrected version of the feedback
+      setCorrectedFeedback(data.corrected_feedback || trimmedDesc);
+
       setAiResult({
         isValid: data.is_valid,
         score: data.score,
-        category: data.category as any,
+        category: data.category as "appreciation" | "improvement" | "reject",
         rejectionReason: !data.is_valid ? "Feedback needs to be more clear or constructive." : null,
         suggestion: data.suggestion,
+      });
+
+      setAnalysedState({
+        description: trimmedDesc,
+        uRating: understandingRating,
+        iRating: instructorRating,
       });
     } catch (e) {
       console.warn("Edge function failed, using local analysis fallback:", e);
       const result = analyzeLocally(description, understandingRating, instructorRating);
+      setCorrectedFeedback(trimmedDesc); // Keep original if AI fails
       setAiResult(result);
-    } finally {
       setAnalysedState({
-        description: description.trim(),
+        description: trimmedDesc,
         uRating: understandingRating,
         iRating: instructorRating,
       });
+    } finally {
       setAiLoading(false);
     }
-  };
+  }, [description, understandingRating, instructorRating]);
+
+  // Debounce effect for automatic real-time AI suggestions
+  useEffect(() => {
+    const trimmedDesc = description.trim();
+
+    // If analysis is not required or description is empty, reset and return
+    if (!requiresAnalysis || !trimmedDesc) {
+      setAiResult(null);
+      setAnalysedState(null);
+      setCorrectedFeedback("");
+      setAiLoading(false);
+      return;
+    }
+
+    // If current inputs already match the analysed state, do nothing
+    if (
+      analysedState &&
+      analysedState.description === trimmedDesc &&
+      analysedState.uRating === understandingRating &&
+      analysedState.iRating === instructorRating
+    ) {
+      return;
+    }
+
+    // Set loading state to true immediately as user edits
+    setAiLoading(true);
+
+    const timer = setTimeout(() => {
+      runAnalysis();
+    }, 1000); // 1-second debounce to give fluid typing experience
+
+    return () => clearTimeout(timer);
+  }, [description, understandingRating, instructorRating, requiresAnalysis, analysedState, runAnalysis]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -368,12 +287,12 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     if (ratingViolation) return setError("Understanding rating can't be higher than the Teaching rating.");
     if (understandingRating === 0 || instructorRating === 0) return setError("Please provide both ratings.");
 
-    if (anyRatingLow && !description.trim()) {
-      return setError("Please provide feedback when any rating is below 4.");
+    if (!bothFive && !description.trim()) {
+      return setError("Please provide feedback. Description is mandatory for any rating below 5.");
     }
 
     if (requiresAnalysis && !analysisUpToDate) {
-      return setError("Please click 'Analyze My Feedback' before submitting.");
+      return setError("Please wait for the AI feedback analysis to complete before submitting.");
     }
 
     if (aiResult && !aiResult.isValid) {
@@ -404,6 +323,10 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
       const finalScore = aiResult?.score ?? 75;
       const today = getLocalDateString();
+      const localTime = getLocalTimestampString();
+
+      // Fix: final submitted feedback value is always the latest text from description
+      const finalDescription = description.trim() || "NA";
 
       const { error: dbError } = await supabase.from("attendance_feedback").insert({
         student_id: trimmedId,
@@ -411,7 +334,8 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         subject_id: subjectId,
         understanding_rating: understandingRating,
         instructor_rating: instructorRating,
-        description: description.trim() || "NA",
+        description: finalDescription,
+        ai_corrected_description: correctedFeedback || (description.trim() ? cleanBasicLocal(description) : null),
         ai_score: finalScore,
         attendance_marked: true,
       });
@@ -437,10 +361,10 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       // 1. Instructor's own sheet — partial view (no student identity)
       if (instructorSheetUrl && instructorSheetUrl.trim()) {
         const instructorFormBody = new URLSearchParams({
-          timestamp: new Date().toISOString(),
+          timestamp: localTime,
           understanding_rating: String(understandingRating),
           instructor_rating: String(instructorRating),
-          description: description.trim() || "NA",
+          description: finalDescription,
         });
         fetch(instructorSheetUrl.trim(), {
           method: "POST",
@@ -453,13 +377,13 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
       if (adminSheetUrl && adminSheetUrl.trim()) {
         const studentName = roster.find(r => r.student_id === trimmedId)?.name ?? "";
         const adminFormBody = new URLSearchParams({
-          timestamp: new Date().toISOString(),
+          timestamp: localTime,
           student_id: trimmedId,
           student_name: studentName,
           section: trimmedSection,
           understanding_rating: String(understandingRating),
           instructor_rating: String(instructorRating),
-          description: description.trim() || "NA",
+          description: finalDescription,
           instructor_id: instructorId || "Unknown",
         });
         fetch(adminSheetUrl.trim(), {
@@ -591,9 +515,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
             Step 6 — Describe what could help you learn better
             {bothFive
               ? <span className="text-muted-foreground font-normal ml-1">(optional)</span>
-              : anyRatingLow
-              ? <span className="text-destructive font-normal ml-1">(required — rating below 4)</span>
-              : null}
+              : <span className="text-destructive font-normal ml-1">(required — rating below 5)</span>}
           </label>
           <Textarea
             id="description"
@@ -614,36 +536,34 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
           </p>
         </div>
 
-        {/* Analyze button — only shown when needed */}
-        {requiresAnalysis && !analysisUpToDate && (
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full gap-2"
-            disabled={aiLoading || !description.trim() || understandingRating === 0 || instructorRating === 0}
-            onClick={runAnalysis}
-          >
-            {aiLoading
-              ? <><Sparkles className="w-4 h-4 animate-pulse" />Analyzing...</>
-              : <><Sparkles className="w-4 h-4" />Analyze My Feedback</>}
-          </Button>
-        )}
-
         {/* AI Result Panel */}
         <AnimatePresence mode="wait">
-          {!aiLoading && aiResult && (
+          {aiLoading ? (
+            <motion.div
+              key="ai-loading"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="p-4 rounded-lg border border-primary/20 bg-primary/5 space-y-2 flex items-center gap-3 shadow-[0_4px_20px_rgba(0,0,0,0.05)]"
+            >
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-foreground">AI Feedback Assistant is analyzing...</p>
+                <p className="text-[11px] text-muted-foreground">Checking spelling, grammar, clarity, and tone in real time</p>
+              </div>
+            </motion.div>
+          ) : aiResult ? (
             <motion.div
               key="ai-result"
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
-              className={`p-4 rounded-lg border space-y-3 ${
-                aiResult.isValid
-                  ? aiResult.category === "appreciation"
-                    ? "bg-success/5 border-success/20"
-                    : "bg-warning/5 border-warning/20"
-                  : "bg-destructive/5 border-destructive/20"
-              }`}
+              className={`p-4 rounded-lg border space-y-3 shadow-[0_4px_20px_rgba(0,0,0,0.05)] ${aiResult.isValid
+                ? aiResult.category === "appreciation"
+                  ? "bg-success/5 border-success/20"
+                  : "bg-warning/5 border-warning/20"
+                : "bg-destructive/5 border-destructive/20"
+                }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -654,11 +574,10 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
                     AI Score: {aiResult.score}/100
                   </span>
                 </div>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${
-                  aiResult.category === "appreciation" ? "bg-success/10 text-success" :
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${aiResult.category === "appreciation" ? "bg-success/10 text-success" :
                   aiResult.category === "improvement" ? "bg-warning/10 text-warning" :
-                  "bg-destructive/10 text-destructive"
-                }`}>
+                    "bg-destructive/10 text-destructive"
+                  }`}>
                   {aiResult.category === "needsWork" ? "Needs Work" : aiResult.category}
                 </span>
               </div>
@@ -673,8 +592,11 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
               {/* Contextual AI suggestion — always shown so student can replace */}
               {aiResult.suggestion && (
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground font-medium">AI Suggested Feedback:</p>
-                  <p className="text-sm text-foreground/80 bg-background/50 p-3 rounded-md italic">
+                  <p className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-primary" />
+                    AI Suggested Feedback:
+                  </p>
+                  <p className="text-sm text-foreground/80 bg-background/50 p-3 rounded-md italic border border-border/40">
                     {aiResult.suggestion}
                   </p>
                   <Button
@@ -684,8 +606,18 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
                     onClick={() => {
                       const s = aiResult.suggestion!.trim();
                       setDescription(s);
-                      setAiResult({ ...aiResult, isValid: true, score: Math.max(aiResult.score, 80) });
-                      setAnalysedState({ description: s, uRating: understandingRating, iRating: instructorRating });
+                      setCorrectedFeedback(s);
+                      setAnalysedState({
+                        description: s,
+                        uRating: understandingRating,
+                        iRating: instructorRating,
+                      });
+                      setAiResult({
+                        ...aiResult,
+                        isValid: true,
+                        score: Math.max(aiResult.score, 80),
+                        suggestion: s,
+                      });
                     }}
                     className="gap-1.5"
                   >
@@ -697,12 +629,12 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
               {/* Success state */}
               {aiResult.isValid && (
-                <p className="text-xs text-success font-medium">
+                <p className="text-xs text-success font-medium flex items-center gap-1">
                   ✓ Your feedback looks good — you're ready to submit!
                 </p>
               )}
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         {/* Error */}

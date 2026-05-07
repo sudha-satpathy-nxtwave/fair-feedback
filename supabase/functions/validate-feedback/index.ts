@@ -1,3 +1,4 @@
+/// <reference lib="deno.ns" />
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 function corsHeaders(origin: string) {
@@ -11,35 +12,63 @@ function corsHeaders(origin: string) {
   };
 }
 
-const SYSTEM_PROMPT = `You are an AI feedback validator for an educational institution.
+const WEAK_FEEDBACK_PATTERNS = [
+  "na",
+  "n/a",
+  "nothing",
+  "nil",
+  "none",
+  "ok",
+  "okay",
+  "good",
+  "nice",
+  ".",
+  "-",
+  "_",
+  "no",
+];
 
-You will receive:
-- Two ratings (1–5)
-- A student's written feedback
+const GENERIC_SUGGESTIONS = [
+  "More practical examples during the session would help improve understanding.",
+  "A slightly slower explanation of difficult concepts would make learning easier.",
+  "More hands-on exercises and real-world examples would improve clarity.",
+  "Additional revision sessions for important topics would be helpful.",
+  "More interactive discussions during class would improve engagement.",
+];
 
-Your tasks:
-1. Reject vague or meaningless feedback (e.g. "good", "ok", "nice").
-2. Reject unprofessional or abusive feedback.
-3. Classify into ONE:
-   - "appreciation" (positive feedback)
-   - "improvement" (constructive criticism)
-   - "reject"
-4. Check rating vs text consistency.
-5. Score feedback from 0–100 based on clarity, usefulness, and professionalism.
-6. is_valid = true ONLY if score >= 60 AND category != "reject".
+const SYSTEM_PROMPT = `
+You are an AI classroom feedback reviewer and writing assistant.
 
-7. VERY IMPORTANT: REWRITE SUGGESTION
-If the student's feedback is valid but poorly written, rewrite it into a clear, professional sentence.
-If the student's feedback is vague/rejected, suggest what they SHOULD write about.
+Your task:
+1. Analyze student feedback quality
+2. Correct grammar and spelling
+3. Generate an improved feedback suggestion
 
-RULES FOR REWRITING:
-- NEVER HALLUCINATE OR ADD NEW COMPLAINTS. If they say "pace needs to be faster", DO NOT add "needs more examples" or say "slower pace". Keep exactly their core meaning, just polish the grammar and tone.
-- If they want it faster, write: "The session's pace could be increased to cover more material effectively."
-- If they want it slower, write: "The session moved a bit too fast; a slightly slower pace would help me follow better."
-- If the feedback is too short/vague (e.g. "NA", "Good"), suggest: "Please provide specific details about what you liked or what could be improved regarding the pace, clarity, or examples."
+IMPORTANT VALIDATION RULES:
+- Feedback like "NA", "ok", "good", ".", "-", "nothing" must ALWAYS:
+  - receive score below 40
+  - category = "reject"
+  - is_valid = false
 
-Return ONLY valid JSON:
-{"score": number, "is_valid": boolean, "category": "appreciation"|"improvement"|"reject", "suggestion": string}
+SCORING RULES:
+- 0-39 → meaningless/gibberish/placeholder
+- 40-59 → weak but partially meaningful
+- 60-79 → decent constructive feedback
+- 80-100 → detailed and highly constructive feedback
+
+OUTPUT RULES:
+- suggestion must NEVER repeat meaningless feedback
+- suggestion must always be meaningful and constructive
+- output only valid JSON
+
+Return ONLY this JSON:
+{
+  "score": number,
+  "is_valid": boolean,
+  "category": "appreciation" | "improvement" | "reject",
+  "corrected_feedback": string,
+  "suggestion": string
+}
 `;
 
 function buildUserPrompt(
@@ -47,144 +76,192 @@ function buildUserPrompt(
   instructor_rating: number,
   description: string
 ) {
-  const avg = (understanding_rating + instructor_rating) / 2;
-
   return `
 Understanding Rating: ${understanding_rating}/5
 Instructor Rating: ${instructor_rating}/5
-Average Rating: ${avg}/5
 Student Feedback: "${description}"
 `;
 }
 
+function cleanBasic(text: string): string {
+  const t = text.trim();
+
+  if (!t) return "";
+
+  let result = t.replace(/\s+/g, " ");
+
+  result =
+    result.charAt(0).toUpperCase() + result.slice(1);
+
+  if (!/[.!?]$/.test(result)) {
+    result += ".";
+  }
+
+  return result;
+}
+
+function isWeakFeedback(text: string): boolean {
+  const cleaned = text.trim().toLowerCase();
+
+  if (!cleaned) return true;
+
+  if (WEAK_FEEDBACK_PATTERNS.includes(cleaned)) {
+    return true;
+  }
+
+  if (cleaned.length < 4) {
+    return true;
+  }
+
+  const words = cleaned.split(/\s+/);
+
+  if (words.length <= 2) {
+    return true;
+  }
+
+  return false;
+}
+
+function getWeakFeedbackSuggestion(index: number): string {
+  return GENERIC_SUGGESTIONS[
+    index % GENERIC_SUGGESTIONS.length
+  ];
+}
+
 async function callGemini(prompt: string, apiKey: string): Promise<string> {
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: SYSTEM_PROMPT + "\n\n" + prompt }] }],
+        contents: [
+          {
+            parts: [
+              {
+                text: SYSTEM_PROMPT + "\n\n" + prompt,
+              },
+            ],
+          },
+        ],
         generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 500,
+          temperature: 0.3,
+          maxOutputTokens: 400,
         },
       }),
     }
   );
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
+    throw new Error(await res.text());
   }
 
   const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
 
-async function callLovableAI(prompt: string, apiKey: string): Promise<string> {
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.4,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
-  }
-
-  const data = await res.json();
-  return data?.choices?.[0]?.message?.content || "";
+  return (
+    data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+  );
 }
 
 function safeParseJSON(text: string) {
   try {
     const match = text.match(/\{[\s\S]*\}/);
+
     if (!match) return null;
+
     return JSON.parse(match[0]);
   } catch {
     return null;
   }
 }
 
-function buildFallbackSuggestion(description: string) {
-  const text = description.trim();
+function normalizeResult(parsed: any, description: string) {
+  const cleanedInput = description.trim();
 
-  if (!text) {
-    return "I would benefit from clearer explanations and more structured guidance.";
+  let score = Number(parsed?.score || 0);
+
+  score = Math.max(0, Math.min(100, score));
+
+  let category = parsed?.category;
+
+  if (
+    !["appreciation", "improvement", "reject"].includes(
+      category
+    )
+  ) {
+    category = "reject";
   }
 
-  const lower = text.toLowerCase();
+  let corrected_feedback = cleanBasic(
+    parsed?.corrected_feedback || cleanedInput
+  );
 
-  if (lower.includes("fast")) {
-    return "The session felt a bit fast-paced, and slowing down the explanation would improve understanding.";
+  let suggestion = String(
+    parsed?.suggestion || ""
+  ).trim();
+
+  if (
+    !suggestion ||
+    suggestion.length < 10 ||
+    WEAK_FEEDBACK_PATTERNS.includes(
+      suggestion.toLowerCase()
+    )
+  ) {
+    suggestion =
+      "More practical examples and clearer explanations would improve understanding.";
   }
 
-  if (lower.includes("confusing") || lower.includes("difficult")) {
-    return "The explanation was somewhat unclear, and more structured guidance would help improve comprehension.";
+  const weak = isWeakFeedback(cleanedInput);
+
+  if (weak) {
+    return {
+      score: 25,
+      is_valid: false,
+      category: "reject",
+      corrected_feedback:
+        corrected_feedback || cleanBasic(cleanedInput),
+      suggestion: getWeakFeedbackSuggestion(
+        cleanedInput.length
+      ),
+    };
   }
-
-  if (lower.includes("example")) {
-    return "Including more practical examples would make the topic easier to understand.";
-  }
-
-  if (text.split(" ").length <= 3) {
-    return "More detailed explanation and guidance would help in better understanding the topic.";
-  }
-
-  return `The student mentioned that ${text.toLowerCase()}, and improving clarity and structure would enhance learning.`;
-}
-
-function fallbackResult(
-  understanding_rating: number,
-  instructor_rating: number,
-  description: string
-) {
-  const avg = (understanding_rating + instructor_rating) / 2;
-  const words = description.trim().split(/\s+/).length;
-
-  let score = 50 + words * 3;
-  score = Math.min(score, 85);
-
-  const category =
-    avg >= 4 ? "appreciation" : avg <= 2.5 ? "improvement" : "improvement";
 
   return {
     score,
-    is_valid: score >= 75,
+    is_valid: score >= 60,
     category,
-    suggestion: buildFallbackSuggestion(description),
+    corrected_feedback,
+    suggestion,
   };
 }
 
-function normalizeResult(parsed: any, description: string) {
-  let suggestion = String(parsed?.suggestion || "").trim();
+function fallbackResult(description: string) {
+  const weak = isWeakFeedback(description);
 
-  // ONLY fallback if empty or too short
-  if (!suggestion || suggestion.length < 10) {
-    suggestion = buildFallbackSuggestion(description);
+  if (weak) {
+    return {
+      score: 25,
+      is_valid: false,
+      category: "reject",
+      corrected_feedback: cleanBasic(description),
+      suggestion:
+        "More practical examples and interactive discussions would improve understanding.",
+    };
   }
 
+  const words = description
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+
   return {
-    score: Math.max(0, Math.min(100, Number(parsed?.score) || 0)),
-    is_valid: Boolean(parsed?.is_valid),
-    category: ["appreciation", "improvement", "reject"].includes(
-      parsed?.category
-    )
-      ? parsed.category
-      : "reject",
-    suggestion,
+    score: Math.min(85, 55 + words * 3),
+    is_valid: true,
+    category: "improvement",
+    corrected_feedback: cleanBasic(description),
+    suggestion: cleanBasic(description),
   };
 }
 
@@ -192,12 +269,26 @@ serve(async (req) => {
   const origin = req.headers.get("origin") || "*";
 
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(origin),
+    });
   }
 
   try {
-    const { understanding_rating, instructor_rating, description } =
-      await req.json();
+    const {
+      understanding_rating,
+      instructor_rating,
+      description,
+    } = await req.json();
+
+    if (isWeakFeedback(description)) {
+      const result = fallbackResult(description);
+
+      return new Response(JSON.stringify(result), {
+        headers: corsHeaders(origin),
+      });
+    }
 
     const prompt = buildUserPrompt(
       understanding_rating,
@@ -205,70 +296,48 @@ serve(async (req) => {
       description
     );
 
-    let raw = "";
     const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
 
-    // Try Gemini first
-    if (geminiKey) {
-      try {
-        raw = await callGemini(prompt, geminiKey);
-      } catch (e) {
-        console.warn("Gemini failed:", e.message);
-      }
+    if (!geminiKey) {
+      throw new Error("Missing GEMINI_API_KEY");
     }
 
-    // Fallback to Lovable
-    if (!raw && lovableKey) {
-      try {
-        raw = await callLovableAI(prompt, lovableKey);
-      } catch (e) {
-        console.warn("Lovable failed:", e.message);
-      }
-    }
+    const raw = await callGemini(prompt, geminiKey);
 
-    // If both fail → fallback logic
-    if (!raw) {
-      const fallback = fallbackResult(
-        understanding_rating,
-        instructor_rating,
-        description
-      );
-      return new Response(JSON.stringify(fallback), {
-        headers: corsHeaders(origin),
-      });
-    }
-
-    console.log("RAW AI:", raw);
+    console.log("RAW AI RESPONSE:", raw);
 
     const parsed = safeParseJSON(raw);
 
     if (!parsed) {
-      console.warn("JSON parse failed, using fallback");
-      const fallback = fallbackResult(
-        understanding_rating,
-        instructor_rating,
-        description
-      );
+      const fallback = fallbackResult(description);
+
       return new Response(JSON.stringify(fallback), {
         headers: corsHeaders(origin),
       });
     }
 
-    const result = normalizeResult(parsed, description);
+    const result = normalizeResult(
+      parsed,
+      description
+    );
 
     return new Response(JSON.stringify(result), {
       headers: corsHeaders(origin),
     });
   } catch (err) {
-    console.error("Error:", err);
+    console.error(err);
 
-  const message =
-    err instanceof Error ? err.message : "Unknown error";
-
-  return new Response(
-    JSON.stringify({ error: message }),
-    { status: 500, headers: corsHeaders("*") }
-  );
+    return new Response(
+      JSON.stringify({
+        error:
+          err instanceof Error
+            ? err.message
+            : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: corsHeaders("*"),
+      }
+    );
   }
 });
