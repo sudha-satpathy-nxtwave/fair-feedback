@@ -2,9 +2,14 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Link, useNavigate, Navigate } from "react-router-dom";
 import {
-  BookOpen, Download, Users, MessageSquare, CheckCircle2, QrCode, ListChecks,
-  LogOut, Shield, Percent, FileSpreadsheet, Loader2, Image as ImageIcon, X, RefreshCw,
+  BookOpen, Download, Users, MessageSquare, QrCode, ListChecks,
+  LogOut, Shield, FileSpreadsheet, Loader2, Image as ImageIcon, RefreshCw,
+  BarChart2, CalendarCheck,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+  ResponsiveContainer, Cell,
+} from "recharts";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -16,13 +21,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { useLocalAuth } from "@/contexts/LocalAuthContext";
 import RosterAttendanceTable from "@/components/RosterAttendanceTable";
 import RollingNumber from "@/components/RollingNumber";
-import CategoryList from "@/components/CategoryList";
+
 import BulkStudentUpload from "@/components/BulkStudentUpload";
 import BulkSubjectUpload from "@/components/BulkSubjectUpload";
 import InstructorAdminList from "@/components/InstructorAdminList";
 import { Input } from "@/components/ui/input";
 import { getLocalDateString } from "@/lib/dateUtils";
-import { detectSentiment } from "@/lib/feedbackValidation";
 import { toast } from "sonner";
 
 interface FeedbackRow {
@@ -147,7 +151,6 @@ const Dashboard = () => {
   const [instructorFilter, setInstructorFilter] = useState(lockedInstructor ?? "");
   const [allFeedback, setAllFeedback] = useState<FeedbackRow[]>([]);
   const [dbLoading, setDbLoading] = useState(true);
-  const [todayPresentCount, setTodayPresentCount] = useState(0);
   const [rosterCount, setRosterCount] = useState(0);
   const [rosterRows, setRosterRows] = useState<{ section: string; student_id: string; original_index?: number }[]>([]);
   const [subjects, setSubjects] = useState<{ id: string; subject_name: string }[]>([]);
@@ -159,6 +162,14 @@ const Dashboard = () => {
   const [qrGenerateBusy, setQrGenerateBusy] = useState(false);
   const [sheetViewUrl, setSheetViewUrl] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // Analytics state
+  const [subjectAttendanceData, setSubjectAttendanceData] = useState<{ name: string; count: number }[]>([]);
+  const [subjectFeedbackData, setSubjectFeedbackData] = useState<{ name: string; count: number }[]>([]);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [dateFeedbackCount, setDateFeedbackCount] = useState(0);
+  // Increment to force analytics charts to re-fetch after bulk attendance changes
+  const [analyticsRefreshKey, setAnalyticsRefreshKey] = useState(0);
+  const triggerAnalyticsRefresh = () => setAnalyticsRefreshKey((k) => k + 1);
 
   const normalize = (str: string = "") =>
     str.toLowerCase().replace("section", "").trim();
@@ -248,40 +259,98 @@ const Dashboard = () => {
     setSelectedSection("all");
   }, [activeInstructor, isGlobalView]);
 
-  // Load available sections + section-aware roster/attendance counts.
+  // Load available sections + section-aware roster counts.
   // students_master is the SHARED master roster (admin-uploaded CSV) — every
   // instructor sees all sections. Attendance records stay scoped per instructor.
   useEffect(() => {
     (async () => {
-      const { data: rosterRows } = await supabase
+      const { data: rosterData } = await supabase
         .from("students_master")
         .select("section, student_id, original_index")
         .order("original_index", { ascending: true });
-      const rows = (rosterRows ?? []) as { section: string; student_id: string; original_index?: number }[];
+      const rows = (rosterData ?? []) as { section: string; student_id: string; original_index?: number }[];
       setRosterRows(rows);
       const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))];
       setAvailableSections(sections);
 
       const sectionFilteredStudents = selectedSection === "all"
         ? rows
-        : rows.filter(
-            (r) => normalize(r.section) === normalize(selectedSection)
-          );
+        : rows.filter((r) => normalize(r.section) === normalize(selectedSection));
       setRosterCount(sectionFilteredStudents.length);
-
-      let attendanceQuery = supabase
-            .from("daily_attendance")
-            .select("student_id, status")
-            .eq("date", selectedDate);
-
-      const { data: attendanceRows } = await attendanceQuery;
-      const sectionStudentIds = new Set(sectionFilteredStudents.map(s => s.student_id));
-      const count = (attendanceRows ?? []).filter((row: any) => {
-        return row.status === "Present" && sectionStudentIds.has(row.student_id);
-      }).length;
-      setTodayPresentCount(count);
     })();
-  }, [activeInstructor, today, isGlobalView, selectedSection, selectedDate]);
+  }, [activeInstructor, isGlobalView, selectedSection]);
+
+  // Load analytics data (subject-wise attendance + feedback) for selected date/section
+  useEffect(() => {
+    (async () => {
+      // --- Subject-wise attendance for the selected date ---
+      const { data: attRows } = await supabase
+        .from("daily_attendance")
+        .select("student_id, subject_id, status")
+        .eq("date", selectedDate)
+        .eq("status", "Present");
+
+      // Build section student id set for filtering
+      const sectionStudentIds = selectedSection === "all"
+        ? null
+        : new Set(
+            rosterRows
+              .filter((r) => normalize(r.section) === normalize(selectedSection))
+              .map((r) => r.student_id)
+          );
+
+      const attFiltered = (attRows ?? []).filter((r: any) =>
+        sectionStudentIds ? sectionStudentIds.has(r.student_id) : true
+      );
+
+      // Group by subject_id
+      const attBySubject = new Map<string, number>();
+      for (const row of attFiltered as any[]) {
+        if (!row.subject_id) continue;
+        attBySubject.set(row.subject_id, (attBySubject.get(row.subject_id) ?? 0) + 1);
+      }
+
+      // --- Subject-wise feedback for the selected date ---
+      const dayStart = `${selectedDate}T00:00:00`;
+      const dayEnd = `${selectedDate}T23:59:59`;
+      const { data: fbRows } = await supabase
+        .from("attendance_feedback")
+        .select("student_id, subject_id, created_at")
+        .gte("created_at", dayStart)
+        .lte("created_at", dayEnd);
+
+      const fbFiltered = (fbRows ?? []).filter((r: any) =>
+        sectionStudentIds ? sectionStudentIds.has(r.student_id) : true
+      );
+
+      const fbBySubject = new Map<string, number>();
+      for (const row of fbFiltered as any[]) {
+        if (!row.subject_id) continue;
+        fbBySubject.set(row.subject_id, (fbBySubject.get(row.subject_id) ?? 0) + 1);
+      }
+
+      // Sessions conducted = number of distinct subjects with attendance on this date
+      const sessionsSet = new Set<string>(attBySubject.keys());
+      setSessionCount(sessionsSet.size);
+
+      // Date-scoped feedback count
+      setDateFeedbackCount(fbFiltered.length);
+
+      // Map to chart data using subject names
+      const subjectMap = new Map(subjects.map((s) => [s.id, s.subject_name]));
+
+      const attChart = [...attBySubject.entries()]
+        .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
+        .sort((a, b) => b.count - a.count);
+
+      const fbChart = [...fbBySubject.entries()]
+        .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
+        .sort((a, b) => b.count - a.count);
+
+      setSubjectAttendanceData(attChart);
+      setSubjectFeedbackData(fbChart);
+    })();
+  }, [selectedDate, selectedSection, rosterRows, subjects, analyticsRefreshKey]);
 
   const filteredFeedback = useMemo(
     () => {
@@ -304,34 +373,6 @@ const Dashboard = () => {
     [allFeedback, activeInstructor, isGlobalView, selectedSection, rosterRows]
   );
 
-  // Categorize based on sentiment of actual descriptions (ignore "NA" or empty)
-  const appreciationFeedback = useMemo(
-    () =>
-      filteredFeedback
-        .filter((f) => {
-          const desc = f.description?.trim();
-          return desc && desc.toLowerCase() !== "na" && detectSentiment(desc) === "positive";
-        })
-        .slice(0, 50),
-    [filteredFeedback]
-  );
-
-  const improvementFeedback = useMemo(
-    () =>
-      filteredFeedback
-        .filter((f) => {
-          const desc = f.description?.trim();
-          return desc && desc.toLowerCase() !== "na" && detectSentiment(desc) === "negative";
-        })
-        .slice(0, 50),
-    [filteredFeedback]
-  );
-
-  const attendancePct = rosterCount > 0
-    ? Math.round((todayPresentCount / rosterCount) * 100)
-    : 0;
-
-  // Distinct students who've ever submitted
   const totalStudents = rosterCount;
 
   if (authLoading) {
@@ -605,13 +646,12 @@ const Dashboard = () => {
         )}
 
         {/* Stat cards with rolling counters */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {[
-            { icon: MessageSquare, label: "Total Responses", value: filteredFeedback.length, suffix: "" },
-            { icon: Users, label: "Students", value: totalStudents, suffix: "" },
-            { icon: Percent, label: selectedDate === today ? "Attendance Today" : `Attendance ${selectedDate}`, value: attendancePct, suffix: "%" },
-            { icon: CheckCircle2, label: selectedDate === today ? "Present Today" : "Present", value: todayPresentCount, suffix: "" },
-          ].map(({ icon: Icon, label, value, suffix }, idx) => (
+            { icon: Users, label: "Total Students", value: totalStudents, suffix: "", sub: selectedSection === "all" ? "All sections" : `Section ${selectedSection}` },
+            { icon: MessageSquare, label: selectedDate === today ? "Responses Today" : `Responses on ${selectedDate}`, value: dateFeedbackCount, suffix: "", sub: "Feedback submissions" },
+            { icon: CalendarCheck, label: selectedDate === today ? "Sessions Today" : `Sessions on ${selectedDate}`, value: sessionCount, suffix: "", sub: "Distinct subjects conducted" },
+          ].map(({ icon: Icon, label, value, suffix, sub }, idx) => (
             <motion.div
               key={label}
               initial={{ opacity: 0, scale: 0.92 }}
@@ -626,15 +666,73 @@ const Dashboard = () => {
                 {suffix && <span className="text-2xl">{suffix}</span>}
               </p>
               <p className="text-xs text-muted-foreground font-medium">{label}</p>
+              {sub && <p className="text-[11px] text-muted-foreground/60">{sub}</p>}
             </motion.div>
           ))}
         </div>
 
-        {/* Two simple list views (no charts) */}
-        {/* <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <CategoryList items={appreciationFeedback} variant="appreciation" />
-          <CategoryList items={improvementFeedback} variant="improvement" />
-        </div> */}
+        {/* Analytics charts — subject-wise attendance & feedback */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Subject-wise Attendance */}
+          <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-primary" />
+              <h3 className="text-sm font-semibold text-foreground">Subject-wise Attendance</h3>
+              <span className="ml-auto text-[11px] text-muted-foreground">{selectedDate === today ? "Today" : selectedDate}</span>
+            </div>
+            {subjectAttendanceData.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-8">No attendance recorded for this date.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={subjectAttendanceData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
+                  <RechartsTooltip
+                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ fontWeight: 600, color: "hsl(var(--foreground))" }}
+                    formatter={(v: number) => [v, "Present"]}
+                  />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={56}>
+                    {subjectAttendanceData.map((_, i) => (
+                      <Cell key={i} fill={`hsl(var(--primary) / ${0.55 + (i % 3) * 0.15})`} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Subject-wise Feedback Responses */}
+          <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-primary" />
+              <h3 className="text-sm font-semibold text-foreground">Subject-wise Feedback Responses</h3>
+              <span className="ml-auto text-[11px] text-muted-foreground">{selectedDate === today ? "Today" : selectedDate}</span>
+            </div>
+            {subjectFeedbackData.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-8">No feedback responses for this date.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={subjectFeedbackData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} />
+                  <RechartsTooltip
+                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ fontWeight: 600, color: "hsl(var(--foreground))" }}
+                    formatter={(v: number) => [v, "Responses"]}
+                  />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={56}>
+                    {subjectFeedbackData.map((_, i) => (
+                      <Cell key={i} fill={`hsl(142 71% 45% / ${0.55 + (i % 3) * 0.15})`} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
 
         <Tabs defaultValue="attendance" className="space-y-4">
           <TabsList>
@@ -657,7 +755,12 @@ const Dashboard = () => {
                 Pick a specific instructor to manage their attendance roster.
               </div>
             ) : (
-              <RosterAttendanceTable instructorId={activeInstructor} sectionFilter={selectedSection} dateFilter={selectedDate} />
+              <RosterAttendanceTable
+                instructorId={activeInstructor}
+                sectionFilter={selectedSection}
+                dateFilter={selectedDate}
+                onAttendanceChange={triggerAnalyticsRefresh}
+              />
             )}
           </TabsContent>
 

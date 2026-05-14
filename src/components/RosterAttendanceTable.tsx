@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Loader2, Clipboard, ClipboardCheck, UserCheck } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clipboard, ClipboardCheck, UserCheck, UserX } from "lucide-react";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -43,9 +43,11 @@ interface Props {
   dateFilter?: string;
   /** Optional — when set, the subject filter is controlled by the parent. */
   subjectFilter?: string;
+  /** Optional — called after any bulk attendance change so parent can refresh analytics. */
+  onAttendanceChange?: () => void;
 }
 
-const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjectFilter }: Props) => {
+const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjectFilter, onAttendanceChange }: Props) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Map<string, AttendanceRecord>>(new Map());
@@ -56,7 +58,9 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   const [searchQuery, setSearchQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [markingAll, setMarkingAll] = useState(false);
+  const [markingPresent, setMarkingPresent] = useState(false);
+  const [markingAbsent, setMarkingAbsent] = useState(false);
+  const markingAll = markingPresent || markingAbsent;
 
   const today = dateFilter || getLocalDateString();
   const isToday = today === getLocalDateString();
@@ -176,7 +180,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
         next.set(key, data as AttendanceRecord);
         setTodayAttendance(next);
         toast.success(`${student.student_id} marked Present for ${subjectObj.subject_name}`);
-
+        onAttendanceChange?.();
       }
     } else if (existing.status === "Present") {
       const { error } = await supabase.from("daily_attendance").delete().eq("id", existing.id);
@@ -186,7 +190,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
         next.delete(key);
         setTodayAttendance(next);
         toast.success(`${student.student_id} marked Absent for ${subjectObj.subject_name}`);
-
+        onAttendanceChange?.();
       }
     }
     setBusyId(null);
@@ -204,7 +208,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
     const subjectObj = subjects.find(s => s.id === subject);
     if (!subjectObj) return;
 
-    setMarkingAll(true);
+    setMarkingPresent(true);
     try {
       // Students to mark Present = currently filtered/visible students
       const presentStudentIds = new Set(filteredVisible.map(s => s.student_id));
@@ -225,7 +229,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
         const { error } = await supabase
           .from("daily_attendance")
           .upsert(upserts, { onConflict: "student_id, date, instructor_id" });
-        if (error) { toast.error("Failed to mark all present"); setMarkingAll(false); return; }
+        if (error) { toast.error("Failed to mark all present"); setMarkingPresent(false); return; }
       }
 
       // Delete attendance for students NOT in filtered set (mark them Absent)
@@ -259,10 +263,69 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
           ? `All ${presentStudentIds.size} students marked Present for ${subjectObj.subject_name}`
           : `${presentStudentIds.size} students marked Present, ${absentStudentIds.length} marked Absent for ${subjectObj.subject_name}`
       );
+      onAttendanceChange?.();
     } catch (e) {
       toast.error("Something went wrong");
     } finally {
-      setMarkingAll(false);
+      setMarkingPresent(false);
+    }
+  };
+
+  const markAllAbsent = async () => {
+    if (!subject) {
+      toast.error("Please select a specific subject to mark attendance");
+      return;
+    }
+    if (!isToday) {
+      toast.error("Past dates are read-only");
+      return;
+    }
+    const subjectObj = subjects.find(s => s.id === subject);
+    if (!subjectObj) return;
+
+    setMarkingAbsent(true);
+    try {
+      // Students to mark Absent = currently filtered/visible students
+      const absentStudentIds = filteredVisible.map(s => s.student_id);
+      // All students in the section (unfiltered)
+      const allSectionStudentIds = visible.map(s => s.student_id);
+
+      // Delete attendance records for the filtered students (marking them Absent)
+      if (absentStudentIds.length > 0) {
+        const { error } = await supabase
+          .from("daily_attendance")
+          .delete()
+          .in("student_id", absentStudentIds)
+          .eq("date", today)
+          .eq("subject_id", subject);
+        if (error) { toast.error("Failed to mark absent"); setMarkingAbsent(false); return; }
+      }
+
+      // Refresh attendance map from DB
+      const { data: freshAtt } = await supabase
+        .from("daily_attendance")
+        .select("*")
+        .eq("date", today)
+        .eq("subject_id", subject);
+
+      if (freshAtt) {
+        const map = new Map<string, AttendanceRecord>();
+        for (const r of freshAtt as AttendanceRecord[]) {
+          map.set(`${r.student_id}_${r.subject_id}`, r);
+        }
+        setTodayAttendance(map);
+      }
+
+      toast.success(
+        absentStudentIds.length === allSectionStudentIds.length
+          ? `All ${absentStudentIds.length} students marked Absent for ${subjectObj.subject_name}`
+          : `${absentStudentIds.length} students marked Absent for ${subjectObj.subject_name}`
+      );
+      onAttendanceChange?.();
+    } catch (e) {
+      toast.error("Something went wrong");
+    } finally {
+      setMarkingAbsent(false);
     }
   };
 
@@ -368,12 +431,27 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
             disabled={!subject || !isToday || markingAll}
             title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
           >
-            {markingAll ? (
+            {markingPresent ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <UserCheck className="w-3.5 h-3.5" />
             )}
-            {markingAll ? "Marking..." : "Mark All Present"}
+            {markingPresent ? "Marking..." : "Mark All Present"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={markAllAbsent}
+            className="h-10 gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10"
+            disabled={!subject || !isToday || markingAll}
+            title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
+          >
+            {markingAbsent ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <UserX className="w-3.5 h-3.5" />
+            )}
+            {markingAbsent ? "Marking..." : "Mark All Absent"}
           </Button>
         </div>
       </div>
