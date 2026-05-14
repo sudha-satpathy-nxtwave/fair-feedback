@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, AlertCircle, Sparkles, RefreshCw, Lightbulb, Info, CheckCircle2 } from "lucide-react";
+import { Loader2, AlertCircle, Info, CheckCircle2, Plus, X } from "lucide-react";
 import StarRating from "./StarRating";
 import SuccessAnimation from "./SuccessAnimation";
 import StudentSearchSelect, { StudentOption } from "./StudentSearchSelect";
@@ -27,52 +27,166 @@ interface Subject {
   subject_name: string;
 }
 
-// ─── Minimal Fallback Formatter & Analyzer ───────────────────────────────────
+// ─── Improvement Categories ───────────────────────────────────────────────────
 
-function cleanBasicLocal(text: string): string {
-  const t = text.trim();
-  if (!t) return "NA";
-
-  let result = t.replace(/\s+/g, " ");
-  result = result.charAt(0).toUpperCase() + result.slice(1);
-
-  if (!/[.!?]$/.test(result)) {
-    result += ".";
-  }
-
-  return result;
+interface CategoryDef {
+  category: string;
+  areasOfImprovement: string[];
+  proposedSolutions: string[];
 }
 
-interface LocalAiResult {
-  isValid: boolean;
-  score: number;
-  category: "appreciation" | "improvement" | "reject";
-  rejectionReason: string | null;
-  suggestion: string | null;
+const CATEGORIES: CategoryDef[] = [
+  {
+    category: "Pace",
+    areasOfImprovement: ["Concept Explanation", "Coding / Implementation", "Problem Solving"],
+    proposedSolutions: ["Slower", "Faster"],
+  },
+  {
+    category: "Concept Clarity",
+    areasOfImprovement: ["Topic Explanation", "Step-by-step Breakdown", "Problem Understanding"],
+    proposedSolutions: ["Simpler explanation", "Better breakdown", "More detailed explanation"],
+  },
+  {
+    category: "Examples & Practice",
+    areasOfImprovement: ["Examples", "Coding Practice", "Problem Solving Practice"],
+    proposedSolutions: ["More examples", "More practice problems", "More implementation practice"],
+  },
+  {
+    category: "Doubt Solving & Engagement",
+    areasOfImprovement: ["Doubt Clarification", "Session Engagement"],
+    proposedSolutions: ["More doubt-solving time", "More interactive discussion"],
+  },
+  {
+    category: "Communication",
+    areasOfImprovement: ["Voice Clarity", "Language Simplicity", "Audio Quality"],
+    proposedSolutions: ["Clearer communication", "Simpler language", "Better audio quality"],
+  },
+];
+
+interface ImprovementEntry {
+  id: string;
+  category: string;
+  areaOfImprovement: string;
+  proposedSolution: string;
 }
 
-function analyzeLocally(
-  text: string,
-  uRating: number,
-  iRating: number
-): LocalAiResult {
-  const trimmed = text.trim();
-  const words = trimmed.split(/\s+/).filter(Boolean).length;
-  const avgRating = (uRating + iRating) / 2;
-  const cleaned = cleanBasicLocal(trimmed);
-
-  return {
-    isValid: words >= 4,
-    score: Math.min(80, 50 + words * 2),
-    category: avgRating >= 4 ? "appreciation" : "improvement",
-    rejectionReason: words < 4
-      ? "Please write a complete sentence about the session."
-      : null,
-    suggestion: cleaned,
-  };
+function makeId() {
+  return Math.random().toString(36).slice(2, 9);
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Readable feedback sentence builder ──────────────────────────────────────
+
+function buildReadableFeedback(
+  improvements: ImprovementEntry[]
+): string {
+  const sentences = improvements.map(({ category, areaOfImprovement, proposedSolution }) => {
+    switch (category) {
+      case "Pace":
+        return `The pace during ${areaOfImprovement.toLowerCase()} should be ${proposedSolution.toLowerCase()}.`;
+      case "Concept Clarity":
+        return `${proposedSolution} is needed for ${areaOfImprovement.toLowerCase()}.`;
+      case "Examples & Practice":
+        return `${proposedSolution} would help with ${areaOfImprovement.toLowerCase()}.`;
+      case "Doubt Solving & Engagement":
+        return `${proposedSolution} would improve ${areaOfImprovement.toLowerCase()}.`;
+      case "Communication":
+        return `${proposedSolution} is needed to improve ${areaOfImprovement.toLowerCase()}.`;
+      default:
+        return `${category} (${areaOfImprovement}): ${proposedSolution}.`;
+    }
+  });
+
+  return sentences.length > 0 ? sentences.join(" ") : "NA";
+}
+
+function getRequiredCount(lowestRating: number): number {
+  if (lowestRating >= 5) return 0;
+  if (lowestRating === 4) return 1;
+  if (lowestRating === 3) return 2;
+  if (lowestRating === 2) return 3;
+  return 5; // rating 1 → all
+}
+
+// ─── Improvement Card ─────────────────────────────────────────────────────────
+
+function ImprovementCard({
+  entry, index, locked, onRemove, onChange,
+}: {
+  entry: ImprovementEntry;
+  index: number;
+  locked: boolean;
+  onRemove: (id: string) => void;
+  onChange: (id: string, field: "areaOfImprovement" | "proposedSolution", value: string) => void;
+}) {
+  const cat = CATEGORIES.find((c) => c.category === entry.category)!;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -6 }}
+      transition={{ duration: 0.2 }}
+      className="rounded-xl border border-border/60 bg-secondary/30 p-3 space-y-2.5"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-primary/15 text-primary text-[11px] font-bold flex items-center justify-center">
+            {index + 1}
+          </span>
+          <span className="text-sm font-semibold text-foreground">{entry.category}</span>
+        </div>
+        {!locked && (
+          <button type="button" onClick={() => onRemove(entry.id)}
+            className="text-muted-foreground hover:text-destructive transition-colors" aria-label="Remove">
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-xs font-medium text-muted-foreground">Area of Improvement</label>
+        <Select value={entry.areaOfImprovement}
+          onValueChange={(v) => onChange(entry.id, "areaOfImprovement", v)}>
+          <SelectTrigger className="bg-background/60 border-border/60 h-9 text-sm">
+            <SelectValue placeholder="Select area..." />
+          </SelectTrigger>
+          <SelectContent>
+            {cat.areasOfImprovement.map((a) => (
+              <SelectItem key={a} value={a}>{a}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <AnimatePresence>
+        {entry.areaOfImprovement && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }} className="space-y-1 overflow-hidden">
+            <label className="text-xs font-medium text-muted-foreground">Proposed Solution</label>
+            <Select value={entry.proposedSolution}
+              onValueChange={(v) => onChange(entry.id, "proposedSolution", v)}>
+              <SelectTrigger className="bg-background/60 border-border/60 h-9 text-sm">
+                <SelectValue placeholder="Select solution..." />
+              </SelectTrigger>
+              <SelectContent>
+                {cat.proposedSolutions.map((s) => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {entry.areaOfImprovement && entry.proposedSolution && (
+        <div className="flex items-center gap-1.5 text-xs text-success font-medium">
+          <CheckCircle2 className="w-3.5 h-3.5" />Complete
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const [roster, setRoster] = useState<RosterRow[]>([]);
@@ -84,19 +198,11 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
   const [subjectId, setSubjectId] = useState("");
   const [understandingRating, setUnderstandingRating] = useState(0);
   const [instructorRating, setInstructorRating] = useState(0);
-  const [description, setDescription] = useState("");
+  const [improvements, setImprovements] = useState<ImprovementEntry[]>([]);
+  const [additionalComment, setAdditionalComment] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-
-  const [aiResult, setAiResult] = useState<LocalAiResult | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [correctedFeedback, setCorrectedFeedback] = useState<string>("");
-  const [analysedState, setAnalysedState] = useState<{
-    description: string;
-    uRating: number;
-    iRating: number;
-  } | null>(null);
   const [instructorSheetUrl, setInstructorSheetUrl] = useState<string | null>(null);
   const [adminSheetUrl, setAdminSheetUrl] = useState<string | null>(null);
 
@@ -113,46 +219,48 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     })();
   }, []);
 
-  // Fetch instructor's Google Sheet webhook URL
   useEffect(() => {
     if (!instructorId) return;
-    supabase
-      .from("instructor_profiles")
-      .select("google_sheet_webhook_url")
-      .eq("username", instructorId)
-      .single()
-      .then(({ data }) => {
-        setInstructorSheetUrl(data?.google_sheet_webhook_url ?? null);
-      });
+    supabase.from("instructor_profiles").select("google_sheet_webhook_url")
+      .eq("username", instructorId).single()
+      .then(({ data }) => setInstructorSheetUrl(data?.google_sheet_webhook_url ?? null));
   }, [instructorId]);
 
-  // Fetch admin's global sheet webhook URL
   useEffect(() => {
-    supabase
-      .from("admin_config")
-      .select("admin_sheet_webhook_url")
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => {
-        setAdminSheetUrl((data as { admin_sheet_webhook_url?: string | null })?.admin_sheet_webhook_url ?? null);
-      });
+    supabase.from("admin_config").select("admin_sheet_webhook_url").limit(1).maybeSingle()
+      .then(({ data }) =>
+        setAdminSheetUrl((data as { admin_sheet_webhook_url?: string | null })?.admin_sheet_webhook_url ?? null)
+      );
   }, []);
 
-  // Load subjects
   useEffect(() => {
     (async () => {
       setSubjectsLoading(true);
-      const { data } = await supabase
-        .from("subjects")
-        .select("id, subject_name")
+      const { data } = await supabase.from("subjects").select("id, subject_name")
         .order("subject_name", { ascending: true });
       setSubjects((data ?? []) as Subject[]);
       setSubjectsLoading(false);
     })();
   }, []);
 
-  // Reset student when section changes
   useEffect(() => { setStudentId(""); }, [section]);
+
+  // When ratings change, reset/auto-populate improvements
+  useEffect(() => {
+    if (instructorRating === 0 || understandingRating === 0) return;
+    const lowest = Math.min(instructorRating, understandingRating);
+    if (lowest === 5) {
+      setImprovements([]);
+    } else if (lowest === 1) {
+      setImprovements(CATEGORIES.map((cat) => ({
+        id: makeId(), category: cat.category, areaOfImprovement: "", proposedSolution: "",
+      })));
+    } else {
+      // On rating change, trim excess but don't auto-add
+      const req = getRequiredCount(lowest);
+      setImprovements((prev) => prev.length > req ? prev.slice(0, req) : prev);
+    }
+  }, [instructorRating, understandingRating]);
 
   const sections = [...new Set(roster.map((r) => r.section).filter(Boolean))];
   const studentsInSection: StudentOption[] = section
@@ -161,118 +269,48 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
 
   const ratingViolation = understandingRating > 0 && instructorRating > 0 && understandingRating > instructorRating;
   const bothFive = understandingRating === 5 && instructorRating === 5;
-
-  // Description is optional ONLY if both ratings are 5. Otherwise, description is mandatory and requires AI validation.
-  const requiresAnalysis = !bothFive && understandingRating > 0 && instructorRating > 0;
-
-  const analysisUpToDate =
-    aiResult !== null &&
-    analysedState !== null &&
-    analysedState.description === description.trim() &&
-    analysedState.uRating === understandingRating &&
-    analysedState.iRating === instructorRating &&
-    aiResult.isValid;
+  const lowestRating = instructorRating > 0 && understandingRating > 0
+    ? Math.min(instructorRating, understandingRating) : 0;
+  const requiredCount = getRequiredCount(lowestRating);
+  const needsCategories = lowestRating > 0 && !bothFive;
+  const isRating1 = lowestRating === 1;
+  const usedCategories = improvements.map((i) => i.category);
+  const availableCategories = CATEGORIES.filter((c) => !usedCategories.includes(c.category));
+  const allImprovementsComplete = improvements.every(
+    (i) => i.areaOfImprovement.trim() !== "" && i.proposedSolution.trim() !== ""
+  );
+  const hasEnoughCategories = improvements.length >= requiredCount;
 
   const canSubmit =
     !loading &&
-    !aiLoading &&
     section.trim() !== "" &&
     studentId.trim() !== "" &&
     subjectId.trim() !== "" &&
     understandingRating > 0 &&
     instructorRating > 0 &&
     !ratingViolation &&
-    (bothFive ? true : (description.trim().length > 0 && analysisUpToDate));
+    (bothFive || (hasEnoughCategories && allImprovementsComplete));
 
-  // Reset analysis when inputs change
-  const resetAnalysis = () => {
-    setAiResult(null);
-    setAnalysedState(null);
-    setCorrectedFeedback("");
+  const handleAddCategory = (categoryName: string) => {
+    setImprovements((prev) => [
+      ...prev,
+      { id: makeId(), category: categoryName, areaOfImprovement: "", proposedSolution: "" },
+    ]);
   };
 
-  const runAnalysis = useCallback(async () => {
-    const trimmedDesc = description.trim();
-    if (!trimmedDesc || understandingRating === 0 || instructorRating === 0) return;
-    setAiLoading(true);
-    setError("");
+  const handleRemoveCategory = (id: string) => {
+    setImprovements((prev) => prev.filter((i) => i.id !== id));
+  };
 
-    try {
-      const { data, error } = await supabase.functions.invoke("validate-feedback", {
-        body: {
-          understanding_rating: understandingRating,
-          instructor_rating: instructorRating,
-          description: trimmedDesc,
-        },
-      });
-
-      if (error || !data) {
-        throw new Error(error?.message || "Function returned no data");
-      }
-
-      // Store the AI-corrected version of the feedback
-      setCorrectedFeedback(data.corrected_feedback || trimmedDesc);
-
-      setAiResult({
-        isValid: data.is_valid,
-        score: data.score,
-        category: data.category as "appreciation" | "improvement" | "reject",
-        rejectionReason: !data.is_valid ? "Feedback needs to be more clear or constructive." : null,
-        suggestion: data.suggestion,
-      });
-
-      setAnalysedState({
-        description: trimmedDesc,
-        uRating: understandingRating,
-        iRating: instructorRating,
-      });
-    } catch (e) {
-      console.warn("Edge function failed, using local analysis fallback:", e);
-      const result = analyzeLocally(description, understandingRating, instructorRating);
-      setCorrectedFeedback(trimmedDesc); // Keep original if AI fails
-      setAiResult(result);
-      setAnalysedState({
-        description: trimmedDesc,
-        uRating: understandingRating,
-        iRating: instructorRating,
-      });
-    } finally {
-      setAiLoading(false);
-    }
-  }, [description, understandingRating, instructorRating]);
-
-  // Debounce effect for automatic real-time AI suggestions
-  useEffect(() => {
-    const trimmedDesc = description.trim();
-
-    // If analysis is not required or description is empty, reset and return
-    if (!requiresAnalysis || !trimmedDesc) {
-      setAiResult(null);
-      setAnalysedState(null);
-      setCorrectedFeedback("");
-      setAiLoading(false);
-      return;
-    }
-
-    // If current inputs already match the analysed state, do nothing
-    if (
-      analysedState &&
-      analysedState.description === trimmedDesc &&
-      analysedState.uRating === understandingRating &&
-      analysedState.iRating === instructorRating
-    ) {
-      return;
-    }
-
-    // Set loading state to true immediately as user edits
-    setAiLoading(true);
-
-    const timer = setTimeout(() => {
-      runAnalysis();
-    }, 1000); // 1-second debounce to give fluid typing experience
-
-    return () => clearTimeout(timer);
-  }, [description, understandingRating, instructorRating, requiresAnalysis, analysedState, runAnalysis]);
+  const handleImprovementChange = (
+    id: string, field: "areaOfImprovement" | "proposedSolution", value: string
+  ) => {
+    setImprovements((prev) => prev.map((i) => {
+      if (i.id !== id) return i;
+      if (field === "areaOfImprovement") return { ...i, areaOfImprovement: value, proposedSolution: "" };
+      return { ...i, [field]: value };
+    }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -287,16 +325,13 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     if (ratingViolation) return setError("Understanding rating can't be higher than the Teaching rating.");
     if (understandingRating === 0 || instructorRating === 0) return setError("Please provide both ratings.");
 
-    if (!bothFive && !description.trim()) {
-      return setError("Please provide feedback. Description is mandatory for any rating below 5.");
-    }
-
-    if (requiresAnalysis && !analysisUpToDate) {
-      return setError("Please wait for the AI feedback analysis to complete before submitting.");
-    }
-
-    if (aiResult && !aiResult.isValid) {
-      return setError(aiResult.rejectionReason ?? "Please improve your feedback before submitting.");
+    if (needsCategories) {
+      if (improvements.length < requiredCount) {
+        return setError(`Please select at least ${requiredCount} improvement ${requiredCount === 1 ? "category" : "categories"} for this rating.`);
+      }
+      if (!allImprovementsComplete) {
+        return setError("Please complete all dropdown selections for every improvement category.");
+      }
     }
 
     const inRoster = roster.some((r) => r.student_id === trimmedId && r.section === trimmedSection);
@@ -305,28 +340,35 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
     }
 
     setLoading(true);
-
     try {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { data: recentFeedback, error: checkError } = await supabase
-        .from("attendance_feedback")
-        .select("id")
-        .eq("student_id", trimmedId)
-        .eq("subject_id", subjectId)
-        .gt("created_at", oneHourAgo)
-        .limit(1);
+        .from("attendance_feedback").select("id")
+        .eq("student_id", trimmedId).eq("subject_id", subjectId)
+        .gt("created_at", oneHourAgo).limit(1);
 
       if (checkError) throw checkError;
       if (recentFeedback && recentFeedback.length > 0) {
         return setError("You have already submitted feedback for this subject within the last hour.");
       }
 
-      const finalScore = aiResult?.score ?? 75;
       const today = getLocalDateString();
       const localTime = getLocalTimestampString();
 
-      // Fix: final submitted feedback value is always the latest text from description
-      const finalDescription = description.trim() || "NA";
+      // Build the consolidated human-readable feedback string for Google Sheets
+      // Feedback column: only structured improvement sentences
+      const readableFeedback = buildReadableFeedback(improvements);
+      // Additional Remarks column: only the optional textarea input
+      const additionalRemarks = additionalComment.trim() || "NA";
+
+      const structuredFeedback = {
+        instructorRating,
+        understandingRating,
+        improvements: improvements.map(({ category, areaOfImprovement, proposedSolution }) => ({
+          category, areaOfImprovement, proposedSolution,
+        })),
+        additionalComment: additionalComment.trim(),
+      };
 
       const { error: dbError } = await supabase.from("attendance_feedback").insert({
         student_id: trimmedId,
@@ -334,63 +376,48 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         subject_id: subjectId,
         understanding_rating: understandingRating,
         instructor_rating: instructorRating,
-        description: finalDescription,
-        ai_corrected_description: correctedFeedback || (description.trim() ? cleanBasicLocal(description) : null),
-        ai_score: finalScore,
+        description: JSON.stringify(structuredFeedback),
+        ai_corrected_description: null,
+        ai_score: null,
         attendance_marked: true,
       });
       if (dbError) throw dbError;
 
-      const { error: dailyError } = await supabase
-        .from("daily_attendance")
-        .upsert(
-          {
-            student_id: trimmedId,
-            date: today,
-            status: "Present",
-            instructor_id: `${instructorId}_${subjectId}`,
-            subject_id: subjectId,
-          },
-          { onConflict: "student_id, date, instructor_id" }
-        );
+      const { error: dailyError } = await supabase.from("daily_attendance").upsert(
+        { student_id: trimmedId, date: today, status: "Present", instructor_id: `${instructorId}_${subjectId}`, subject_id: subjectId },
+        { onConflict: "student_id, date, instructor_id" }
+      );
+      if (dailyError && dailyError.code !== "23505") throw dailyError;
 
-      if (dailyError && dailyError.code !== "23505") {
-        throw dailyError;
-      }
-
-      // 1. Instructor's own sheet — partial view (no student identity)
-      if (instructorSheetUrl && instructorSheetUrl.trim()) {
-        const instructorFormBody = new URLSearchParams({
-          timestamp: localTime,
-          understanding_rating: String(understandingRating),
-          instructor_rating: String(instructorRating),
-          description: finalDescription,
-        });
+      if (instructorSheetUrl?.trim()) {
         fetch(instructorSheetUrl.trim(), {
-          method: "POST",
-          mode: "no-cors",
-          body: instructorFormBody,
-        }).catch(e => console.error("Instructor fetch error:", e));
+          method: "POST", mode: "no-cors",
+          body: new URLSearchParams({
+            timestamp: localTime,
+            understanding_rating: String(understandingRating),
+            instructor_rating: String(instructorRating),
+            description: readableFeedback,
+            additional_remarks: additionalRemarks,
+          }),
+        }).catch(console.error);
       }
 
-      // 2. Admin's sheet — full view with student identity
-      if (adminSheetUrl && adminSheetUrl.trim()) {
-        const studentName = roster.find(r => r.student_id === trimmedId)?.name ?? "";
-        const adminFormBody = new URLSearchParams({
-          timestamp: localTime,
-          student_id: trimmedId,
-          student_name: studentName,
-          section: trimmedSection,
-          understanding_rating: String(understandingRating),
-          instructor_rating: String(instructorRating),
-          description: finalDescription,
-          instructor_id: instructorId || "Unknown",
-        });
+      if (adminSheetUrl?.trim()) {
+        const studentName = roster.find((r) => r.student_id === trimmedId)?.name ?? "";
         fetch(adminSheetUrl.trim(), {
-          method: "POST",
-          mode: "no-cors",
-          body: adminFormBody,
-        }).catch(e => console.error("Admin fetch error:", e));
+          method: "POST", mode: "no-cors",
+          body: new URLSearchParams({
+            timestamp: localTime,
+            student_id: trimmedId,
+            student_name: studentName,
+            section: trimmedSection,
+            understanding_rating: String(understandingRating),
+            instructor_rating: String(instructorRating),
+            description: readableFeedback,
+            additional_remarks: additionalRemarks,
+            instructor_id: instructorId || "Unknown",
+          }),
+        }).catch(console.error);
       }
 
       setSuccess(true);
@@ -436,7 +463,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         {/* Step 1 */}
         <div className="space-y-1.5">
           <label className="text-sm font-semibold text-foreground">Step 1 — Your Section</label>
-          <Select value={section} onValueChange={(v) => { setSection(v); resetAnalysis(); }}>
+          <Select value={section} onValueChange={(v) => { setSection(v); setError(""); }}>
             <SelectTrigger className="bg-secondary/50 border-border/60 text-base h-11">
               <SelectValue placeholder="Select your section" />
             </SelectTrigger>
@@ -466,7 +493,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         {/* Step 3 */}
         <div className="space-y-1.5">
           <label className="text-sm font-semibold text-foreground">Step 3 — Select Subject</label>
-          <Select value={subjectId} onValueChange={(v) => { setSubjectId(v); resetAnalysis(); }} disabled={subjectsLoading}>
+          <Select value={subjectId} onValueChange={(v) => { setSubjectId(v); setError(""); }} disabled={subjectsLoading}>
             <SelectTrigger className="bg-secondary/50 border-border/60 text-base h-11">
               <SelectValue placeholder={subjectsLoading ? "Loading subjects..." : "Select a subject"} />
             </SelectTrigger>
@@ -481,7 +508,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         {/* Step 4 */}
         <StarRating
           value={instructorRating}
-          onChange={(value) => { setInstructorRating(value); resetAnalysis(); }}
+          onChange={(value) => { setInstructorRating(value); setError(""); }}
           label="Step 4 — Rate your instructor's teaching today"
         />
 
@@ -489,7 +516,7 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
         <div className="space-y-1">
           <StarRating
             value={understandingRating}
-            onChange={(value) => { setUnderstandingRating(value); resetAnalysis(); }}
+            onChange={(value) => { setUnderstandingRating(value); setError(""); }}
             label="Step 5 — Rate your understanding of today's session"
           />
           {ratingViolation && (
@@ -509,132 +536,105 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
           )}
         </div>
 
-        {/* Step 6 */}
-        <div className="space-y-1.5">
-          <label htmlFor="description" className="text-sm font-semibold text-foreground">
-            Step 6 — Describe what could help you learn better
-            {bothFive
-              ? <span className="text-muted-foreground font-normal ml-1">(optional)</span>
-              : <span className="text-destructive font-normal ml-1">(required — rating below 5)</span>}
-          </label>
-          <Textarea
-            id="description"
-            placeholder="Share what was unclear, what you'd like more of, or what helped you..."
-            value={description}
-            onChange={(e) => { setDescription(e.target.value); resetAnalysis(); }}
-            rows={4}
-            className="bg-secondary/50 border-border/60 focus:border-primary text-base resize-none"
-          />
-        </div>
-
-        {/* Generic tip */}
-        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-muted/50 border border-border/40">
-          <Lightbulb className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-          <p className="text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground/70">Tip:</span>{" "}
-            Be specific, respectful, and constructive. Focus on the session content, pace, or teaching style.
-          </p>
-        </div>
-
-        {/* AI Result Panel */}
-        <AnimatePresence mode="wait">
-          {aiLoading ? (
+        {/* Step 6 — Structured Feedback */}
+        <AnimatePresence>
+          {(instructorRating > 0 && understandingRating > 0) && (
             <motion.div
-              key="ai-loading"
-              initial={{ opacity: 0, y: -8 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              className="p-4 rounded-lg border border-primary/20 bg-primary/5 space-y-2 flex items-center gap-3 shadow-[0_4px_20px_rgba(0,0,0,0.05)]"
+              exit={{ opacity: 0 }}
+              className="space-y-3"
             >
-              <Loader2 className="w-4 h-4 animate-spin text-primary" />
               <div className="space-y-1">
-                <p className="text-xs font-semibold text-foreground">AI Feedback Assistant is analyzing...</p>
-                <p className="text-[11px] text-muted-foreground">Checking spelling, grammar, clarity, and tone in real time</p>
-              </div>
-            </motion.div>
-          ) : aiResult ? (
-            <motion.div
-              key="ai-result"
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              className={`p-4 rounded-lg border space-y-3 shadow-[0_4px_20px_rgba(0,0,0,0.05)] ${aiResult.isValid
-                ? aiResult.category === "appreciation"
-                  ? "bg-success/5 border-success/20"
-                  : "bg-warning/5 border-warning/20"
-                : "bg-destructive/5 border-destructive/20"
-                }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {aiResult.isValid
-                    ? <CheckCircle2 className="w-4 h-4 text-success" />
-                    : <AlertCircle className="w-4 h-4 text-destructive" />}
-                  <span className="text-sm font-semibold text-foreground">
-                    AI Score: {aiResult.score}/100
-                  </span>
-                </div>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${aiResult.category === "appreciation" ? "bg-success/10 text-success" :
-                  aiResult.category === "improvement" ? "bg-warning/10 text-warning" :
-                    "bg-destructive/10 text-destructive"
-                  }`}>
-                  {aiResult.category === "needsWork" ? "Needs Work" : aiResult.category}
-                </span>
+                <label className="text-sm font-semibold text-foreground">
+                  Step 6 — Feedback
+                </label>
+                {bothFive ? (
+                  <p className="text-xs text-success font-medium">
+                    ✓ Both ratings are 5 — you can submit directly. Comments are optional.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {lowestRating === 1
+                      ? "1-star rating: All 5 improvement categories are required."
+                      : `Please select at least ${requiredCount} improvement ${requiredCount === 1 ? "category" : "categories"}.`}
+                  </p>
+                )}
               </div>
 
-              {/* Rejection reason — generic, never echoes user's text */}
-              {!aiResult.isValid && aiResult.rejectionReason && (
-                <div className="text-xs text-destructive/90 bg-destructive/10 p-2.5 rounded border border-destructive/20 font-medium">
-                  {aiResult.rejectionReason}
-                </div>
-              )}
-
-              {/* Contextual AI suggestion — always shown so student can replace */}
-              {aiResult.suggestion && (
+              {/* Category Cards */}
+              {needsCategories && (
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-primary" />
-                    AI Suggested Feedback:
-                  </p>
-                  <p className="text-sm text-foreground/80 bg-background/50 p-3 rounded-md italic border border-border/40">
-                    {aiResult.suggestion}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const s = aiResult.suggestion!.trim();
-                      setDescription(s);
-                      setCorrectedFeedback(s);
-                      setAnalysedState({
-                        description: s,
-                        uRating: understandingRating,
-                        iRating: instructorRating,
-                      });
-                      setAiResult({
-                        ...aiResult,
-                        isValid: true,
-                        score: Math.max(aiResult.score, 80),
-                        suggestion: s,
-                      });
-                    }}
-                    className="gap-1.5"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Use this suggestion
-                  </Button>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground font-medium">Improvement Categories</span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                      hasEnoughCategories ? "bg-success/10 text-success" : "bg-warning/10 text-warning"
+                    }`}>
+                      {improvements.length}/{requiredCount} required
+                    </span>
+                  </div>
+
+                  <AnimatePresence mode="popLayout">
+                    {improvements.map((entry, idx) => (
+                      <ImprovementCard
+                        key={entry.id}
+                        entry={entry}
+                        index={idx}
+                        locked={isRating1}
+                        onRemove={handleRemoveCategory}
+                        onChange={handleImprovementChange}
+                      />
+                    ))}
+                  </AnimatePresence>
+
+                  {/* Add category chips */}
+                  {!isRating1 && availableCategories.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">Add category:</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableCategories.map((cat) => (
+                          <button
+                            key={cat.category}
+                            type="button"
+                            onClick={() => handleAddCategory(cat.category)}
+                            className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full border border-border/60 bg-secondary/40 hover:bg-primary/10 hover:border-primary/40 hover:text-primary transition-all"
+                          >
+                            <Plus className="w-3 h-3" />{cat.category}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasEnoughCategories && allImprovementsComplete && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex items-center gap-2 text-xs text-success font-medium p-2.5 rounded-lg bg-success/5 border border-success/20"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      All required categories completed!
+                    </motion.div>
+                  )}
                 </div>
               )}
 
-              {/* Success state */}
-              {aiResult.isValid && (
-                <p className="text-xs text-success font-medium flex items-center gap-1">
-                  ✓ Your feedback looks good — you're ready to submit!
-                </p>
-              )}
+              {/* Optional textarea — always at bottom of Step 6 */}
+              <div className="space-y-1.5">
+                <label htmlFor="additional-comment" className="text-xs font-medium text-muted-foreground">
+                  Additional comments <span className="font-normal">(optional)</span>
+                </label>
+                <Textarea
+                  id="additional-comment"
+                  placeholder="Additional comments (optional)"
+                  value={additionalComment}
+                  onChange={(e) => setAdditionalComment(e.target.value)}
+                  rows={3}
+                  className="bg-secondary/50 border-border/60 focus:border-primary text-base resize-none"
+                />
+              </div>
             </motion.div>
-          ) : null}
+          )}
         </AnimatePresence>
 
         {/* Error */}
@@ -658,7 +658,9 @@ const FeedbackForm = ({ sessionId, instructorId }: FeedbackFormProps) => {
           className="w-full h-12 text-base font-semibold rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground transition-all"
         >
           {loading ? (
-            <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Submitting...</span>
+            <span className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />Submitting...
+            </span>
           ) : ("Submit Feedback & Mark Attendance")}
         </Button>
       </motion.form>

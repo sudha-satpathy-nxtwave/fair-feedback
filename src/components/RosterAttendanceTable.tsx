@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Loader2, Clipboard, ClipboardCheck } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clipboard, ClipboardCheck, UserCheck } from "lucide-react";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -56,6 +56,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
   const [searchQuery, setSearchQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [markingAll, setMarkingAll] = useState(false);
 
   const today = dateFilter || getLocalDateString();
   const isToday = today === getLocalDateString();
@@ -191,6 +192,80 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
     setBusyId(null);
   };
 
+  const markAllPresent = async () => {
+    if (!subject) {
+      toast.error("Please select a specific subject to mark attendance");
+      return;
+    }
+    if (!isToday) {
+      toast.error("Past dates are read-only");
+      return;
+    }
+    const subjectObj = subjects.find(s => s.id === subject);
+    if (!subjectObj) return;
+
+    setMarkingAll(true);
+    try {
+      // Students to mark Present = currently filtered/visible students
+      const presentStudentIds = new Set(filteredVisible.map(s => s.student_id));
+      // All students in the section (unfiltered) = visible
+      const allSectionStudentIds = visible.map(s => s.student_id);
+
+      const targetInstructor = instructorId || "";
+
+      // Upsert Present for all filtered students
+      if (presentStudentIds.size > 0) {
+        const upserts = [...presentStudentIds].map(sid => ({
+          student_id: sid,
+          date: today,
+          status: "Present",
+          instructor_id: `${targetInstructor}_${subject}`,
+          subject_id: subject,
+        }));
+        const { error } = await supabase
+          .from("daily_attendance")
+          .upsert(upserts, { onConflict: "student_id, date, instructor_id" });
+        if (error) { toast.error("Failed to mark all present"); setMarkingAll(false); return; }
+      }
+
+      // Delete attendance for students NOT in filtered set (mark them Absent)
+      const absentStudentIds = allSectionStudentIds.filter(sid => !presentStudentIds.has(sid));
+      if (absentStudentIds.length > 0) {
+        await supabase
+          .from("daily_attendance")
+          .delete()
+          .in("student_id", absentStudentIds)
+          .eq("date", today)
+          .eq("subject_id", subject);
+      }
+
+      // Refresh attendance map from DB
+      const { data: freshAtt } = await supabase
+        .from("daily_attendance")
+        .select("*")
+        .eq("date", today)
+        .eq("subject_id", subject);
+
+      if (freshAtt) {
+        const map = new Map<string, AttendanceRecord>();
+        for (const r of freshAtt as AttendanceRecord[]) {
+          map.set(`${r.student_id}_${r.subject_id}`, r);
+        }
+        setTodayAttendance(map);
+      }
+
+      toast.success(
+        presentStudentIds.size === allSectionStudentIds.length
+          ? `All ${presentStudentIds.size} students marked Present for ${subjectObj.subject_name}`
+          : `${presentStudentIds.size} students marked Present, ${absentStudentIds.length} marked Absent for ${subjectObj.subject_name}`
+      );
+    } catch (e) {
+      toast.error("Something went wrong");
+    } finally {
+      setMarkingAll(false);
+    }
+  };
+
   const copyStatusColumn = async () => {
     const lines = filteredVisible.map((s) => {
       const att = getAttendanceRecord(s);
@@ -245,29 +320,35 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
 
         <div className="flex flex-wrap gap-2 items-center">
           {!isControlled && sections.length > 0 && (
-            <Select value={section} onValueChange={setInternalSection}>
-              <SelectTrigger className="h-10 w-[160px] text-xs">
-                <SelectValue placeholder="Section" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All sections</SelectItem>
-                {sections.map((s) => (
-                  <SelectItem key={s} value={s}>Section {s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-semibold text-foreground whitespace-nowrap">Section:</span>
+              <Select value={section} onValueChange={setInternalSection}>
+                <SelectTrigger className="h-10 w-[160px] text-xs">
+                  <SelectValue placeholder="Section" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sections</SelectItem>
+                  {sections.map((s) => (
+                    <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
           {subjects.length > 0 && subjectFilter === undefined && (
-            <Select value={subject} onValueChange={setInternalSubject}>
-              <SelectTrigger className="h-10 w-[180px] text-xs">
-                <SelectValue placeholder="Select Subject" />
-              </SelectTrigger>
-              <SelectContent>
-                {subjects.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-semibold text-foreground whitespace-nowrap">Subject:</span>
+              <Select value={subject} onValueChange={setInternalSubject}>
+                <SelectTrigger className="h-10 w-[180px] text-xs">
+                  <SelectValue placeholder="Select Subject" />
+                </SelectTrigger>
+                <SelectContent>
+                  {subjects.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
           <Button
             size="sm"
@@ -278,6 +359,21 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
           >
             {copied ? <ClipboardCheck className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
             {copied ? "Copied!" : "Copy Attendance Cell"}
+          </Button>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={markAllPresent}
+            className="h-10 gap-1.5 text-xs"
+            disabled={!subject || !isToday || markingAll}
+            title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
+          >
+            {markingAll ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <UserCheck className="w-3.5 h-3.5" />
+            )}
+            {markingAll ? "Marking..." : "Mark All Present"}
           </Button>
         </div>
       </div>
