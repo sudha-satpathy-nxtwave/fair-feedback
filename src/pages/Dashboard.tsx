@@ -4,7 +4,7 @@ import { Link, useNavigate, Navigate } from "react-router-dom";
 import {
   BookOpen, Download, Users, MessageSquare, QrCode, ListChecks,
   LogOut, Shield, FileSpreadsheet, Loader2, Image as ImageIcon, RefreshCw,
-  BarChart2, CalendarCheck,
+  BarChart2, CalendarCheck, ExternalLink, Copy, Check,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -162,6 +162,7 @@ const Dashboard = () => {
   const [qrGenerateBusy, setQrGenerateBusy] = useState(false);
   const [sheetViewUrl, setSheetViewUrl] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [copiedQrLink, setCopiedQrLink] = useState(false);
   // Analytics state
   const [subjectAttendanceData, setSubjectAttendanceData] = useState<{ name: string; count: number }[]>([]);
   const [subjectFeedbackData, setSubjectFeedbackData] = useState<{ name: string; count: number }[]>([]);
@@ -221,8 +222,9 @@ const Dashboard = () => {
     })();
   }, []);
 
-  // Load feedback
+  // Load feedback + subscribe to real-time inserts so stats/graphs update instantly
   useEffect(() => {
+    // Initial load
     (async () => {
       const { data, error } = await supabase
         .from("attendance_feedback")
@@ -231,6 +233,25 @@ const Dashboard = () => {
       if (!error && data) setAllFeedback(data as FeedbackRow[]);
       setDbLoading(false);
     })();
+
+    // Real-time subscription — fires whenever a student submits feedback
+    const channel = supabase
+      .channel("dashboard-feedback-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "attendance_feedback" },
+        (payload) => {
+          // Prepend new row so the All Responses table updates immediately
+          setAllFeedback((prev) => [payload.new as FeedbackRow, ...prev]);
+          // Bump the refresh key so analytics stats + charts re-fetch from DB
+          setAnalyticsRefreshKey((k) => k + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const knownInstructorIds = useMemo(() => {
@@ -259,11 +280,11 @@ const Dashboard = () => {
     setSelectedSection("all");
   }, [activeInstructor, isGlobalView]);
 
-  // Load available sections + section-aware roster counts.
-  // students_master is the SHARED master roster (admin-uploaded CSV) — every
-  // instructor sees all sections. Attendance records stay scoped per instructor.
+  // Unified data-loading effect — roster count + all analytics in one atomic pass.
+  // Runs whenever any relevant filter (section, date, instructor) changes.
   useEffect(() => {
     (async () => {
+      // ── 1. Fetch full roster ────────────────────────────────────────────────
       const { data: rosterData } = await supabase
         .from("students_master")
         .select("section, student_id, original_index")
@@ -273,51 +294,51 @@ const Dashboard = () => {
       const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))];
       setAvailableSections(sections);
 
-      const sectionFilteredStudents = selectedSection === "all"
+      // ── 2. Build section-filtered student id set ───────────────────────────
+      const sectionRows = selectedSection === "all"
         ? rows
         : rows.filter((r) => normalize(r.section) === normalize(selectedSection));
-      setRosterCount(sectionFilteredStudents.length);
-    })();
-  }, [activeInstructor, isGlobalView, selectedSection]);
+      setRosterCount(sectionRows.length);
 
-  // Load analytics data (subject-wise attendance + feedback) for selected date/section
-  useEffect(() => {
-    (async () => {
-      // --- Subject-wise attendance for the selected date ---
+      const sectionStudentIds: Set<string> | null = selectedSection === "all"
+        ? null
+        : new Set(sectionRows.map((r) => r.student_id));
+
+      // ── 3. Subject-wise attendance for selected date ────────────────────────
       const { data: attRows } = await supabase
         .from("daily_attendance")
         .select("student_id, subject_id, status")
         .eq("date", selectedDate)
         .eq("status", "Present");
 
-      // Build section student id set for filtering
-      const sectionStudentIds = selectedSection === "all"
-        ? null
-        : new Set(
-            rosterRows
-              .filter((r) => normalize(r.section) === normalize(selectedSection))
-              .map((r) => r.student_id)
-          );
-
       const attFiltered = (attRows ?? []).filter((r: any) =>
         sectionStudentIds ? sectionStudentIds.has(r.student_id) : true
       );
 
-      // Group by subject_id
       const attBySubject = new Map<string, number>();
       for (const row of attFiltered as any[]) {
         if (!row.subject_id) continue;
         attBySubject.set(row.subject_id, (attBySubject.get(row.subject_id) ?? 0) + 1);
       }
 
-      // --- Subject-wise feedback for the selected date ---
+      // Sessions conducted = distinct subjects with present students on this date
+      setSessionCount(new Set<string>(attBySubject.keys()).size);
+
+      // ── 4. Subject-wise feedback for selected date ──────────────────────────
       const dayStart = `${selectedDate}T00:00:00`;
-      const dayEnd = `${selectedDate}T23:59:59`;
-      const { data: fbRows } = await supabase
+      const dayEnd   = `${selectedDate}T23:59:59`;
+      let fbQuery = supabase
         .from("attendance_feedback")
-        .select("student_id, subject_id, created_at")
+        .select("student_id, subject_id, session_id, created_at")
         .gte("created_at", dayStart)
         .lte("created_at", dayEnd);
+
+      // Scope feedback to the active instructor (non-admin must only see their own)
+      if (!isGlobalView && activeInstructor) {
+        fbQuery = fbQuery.like("session_id", `${activeInstructor}_%`);
+      }
+
+      const { data: fbRows } = await fbQuery;
 
       const fbFiltered = (fbRows ?? []).filter((r: any) =>
         sectionStudentIds ? sectionStudentIds.has(r.student_id) : true
@@ -329,28 +350,23 @@ const Dashboard = () => {
         fbBySubject.set(row.subject_id, (fbBySubject.get(row.subject_id) ?? 0) + 1);
       }
 
-      // Sessions conducted = number of distinct subjects with attendance on this date
-      const sessionsSet = new Set<string>(attBySubject.keys());
-      setSessionCount(sessionsSet.size);
-
-      // Date-scoped feedback count
       setDateFeedbackCount(fbFiltered.length);
 
-      // Map to chart data using subject names
+      // ── 5. Build chart data ────────────────────────────────────────────────
       const subjectMap = new Map(subjects.map((s) => [s.id, s.subject_name]));
 
-      const attChart = [...attBySubject.entries()]
-        .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
-        .sort((a, b) => b.count - a.count);
-
-      const fbChart = [...fbBySubject.entries()]
-        .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
-        .sort((a, b) => b.count - a.count);
-
-      setSubjectAttendanceData(attChart);
-      setSubjectFeedbackData(fbChart);
+      setSubjectAttendanceData(
+        [...attBySubject.entries()]
+          .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
+          .sort((a, b) => b.count - a.count)
+      );
+      setSubjectFeedbackData(
+        [...fbBySubject.entries()]
+          .map(([id, count]) => ({ name: subjectMap.get(id) ?? id, count }))
+          .sort((a, b) => b.count - a.count)
+      );
     })();
-  }, [selectedDate, selectedSection, rosterRows, subjects, analyticsRefreshKey]);
+  }, [selectedDate, selectedSection, activeInstructor, isGlobalView, subjects, analyticsRefreshKey]);
 
   const filteredFeedback = useMemo(
     () => {
@@ -757,7 +773,6 @@ const Dashboard = () => {
             ) : (
               <RosterAttendanceTable
                 instructorId={activeInstructor}
-                sectionFilter={selectedSection}
                 dateFilter={selectedDate}
                 onAttendanceChange={triggerAnalyticsRefresh}
               />
@@ -838,6 +853,40 @@ const Dashboard = () => {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Feedback URL */}
+            {activeProfile && (() => {
+              const feedbackUrl = `${window.location.origin}/feedback?instructor=${encodeURIComponent(activeProfile.display_name)}&ref=${activeProfile.username}`;
+              return (
+                <div className="rounded-lg border border-border/60 bg-secondary/30 p-3 space-y-2">
+                  <p className="text-xs font-semibold text-foreground">Feedback Link</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-muted-foreground font-mono break-all flex-1 leading-relaxed">{feedbackUrl}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 h-8 text-xs gap-1.5"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(feedbackUrl);
+                        setCopiedQrLink(true);
+                        setTimeout(() => setCopiedQrLink(false), 1800);
+                      }}
+                    >
+                      {copiedQrLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedQrLink ? "Copied!" : "Copy Link"}
+                    </Button>
+                    <a href={feedbackUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
+                      <Button size="sm" variant="outline" className="w-full h-8 text-xs gap-1.5">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open Link
+                      </Button>
+                    </a>
+                  </div>
+                </div>
+              );
+            })()}
+
             {activeProfile?.qr_image_url ? (
               <>
                 <div className="bg-white p-4 rounded-xl flex items-center justify-center">

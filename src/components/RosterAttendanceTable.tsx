@@ -114,12 +114,7 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
     [students]
   );
 
-  // Default internal selector to first section once students load (only when uncontrolled)
-  useEffect(() => {
-    if (!isControlled && internalSection === "all" && sections.length > 0) {
-      setInternalSection(sections[0]);
-    }
-  }, [sections, internalSection, isControlled]);
+
 
   const visible = useMemo(
     () => (section === "all" ? students : students.filter((s) => s.section === section)),
@@ -361,97 +356,105 @@ const RosterAttendanceTable = ({ instructorId, sectionFilter, dateFilter, subjec
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search student ID or name..."
-            className="h-10 text-xs"
-          />
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-10 w-[170px] text-xs">
-              <SelectValue placeholder="Attendance" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All students</SelectItem>
-              <SelectItem value="present">Present only</SelectItem>
-              <SelectItem value="absent">Absent only</SelectItem>
-            </SelectContent>
-          </Select>
+      <div className="space-y-3">
+        {/* Primary Row: Search, Filters, Mark Present, Mark Absent */}
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex flex-wrap items-center gap-2 flex-1">
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search student ID or name..."
+              className="h-10 text-xs w-full sm:w-[200px]"
+            />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-10 w-[140px] text-xs">
+                <SelectValue placeholder="Attendance" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All students</SelectItem>
+                <SelectItem value="present">Present only</SelectItem>
+                <SelectItem value="absent">Absent only</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {!isControlled && sections.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold text-foreground whitespace-nowrap">Section:</span>
+                <Select value={section} onValueChange={setInternalSection}>
+                  <SelectTrigger className="h-10 w-[140px] text-xs">
+                    <SelectValue placeholder="Section" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sections</SelectItem>
+                    {sections.map((s) => (
+                      <SelectItem key={s} value={s}>Section {s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {subjects.length > 0 && subjectFilter === undefined && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold text-foreground whitespace-nowrap">Subject:</span>
+                <Select value={subject} onValueChange={setInternalSubject}>
+                  <SelectTrigger className="h-10 w-[160px] text-xs">
+                    <SelectValue placeholder="Select Subject" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {subjects.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={markAllPresent}
+              className="h-10 gap-1.5 text-xs flex-1 sm:flex-initial"
+              disabled={!subject || !isToday || markingAll}
+              title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
+            >
+              {markingPresent ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <UserCheck className="w-3.5 h-3.5" />
+              )}
+              {markingPresent ? "Marking..." : "Mark All Present"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={markAllAbsent}
+              className="h-10 gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 flex-1 sm:flex-initial"
+              disabled={!subject || !isToday || markingAll}
+              title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
+            >
+              {markingAbsent ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <UserX className="w-3.5 h-3.5" />
+              )}
+              {markingAbsent ? "Marking..." : "Mark All Absent"}
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 items-center">
-          {!isControlled && sections.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-semibold text-foreground whitespace-nowrap">Section:</span>
-              <Select value={section} onValueChange={setInternalSection}>
-                <SelectTrigger className="h-10 w-[160px] text-xs">
-                  <SelectValue placeholder="Section" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All sections</SelectItem>
-                  {sections.map((s) => (
-                    <SelectItem key={s} value={s}>Section {s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {subjects.length > 0 && subjectFilter === undefined && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-semibold text-foreground whitespace-nowrap">Subject:</span>
-              <Select value={subject} onValueChange={setInternalSubject}>
-                <SelectTrigger className="h-10 w-[180px] text-xs">
-                  <SelectValue placeholder="Select Subject" />
-                </SelectTrigger>
-                <SelectContent>
-                  {subjects.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.subject_name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+        {/* Secondary Row: Copy Attendance Cell */}
+        <div className="flex justify-end">
           <Button
             size="sm"
             variant="outline"
             onClick={copyStatusColumn}
-            className="h-10 gap-1.5 text-xs"
+            className="h-8 gap-1.5 text-xs"
             disabled={!subject}
           >
             {copied ? <ClipboardCheck className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
             {copied ? "Copied!" : "Copy Attendance Cell"}
-          </Button>
-          <Button
-            size="sm"
-            variant="default"
-            onClick={markAllPresent}
-            className="h-10 gap-1.5 text-xs"
-            disabled={!subject || !isToday || markingAll}
-            title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
-          >
-            {markingPresent ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <UserCheck className="w-3.5 h-3.5" />
-            )}
-            {markingPresent ? "Marking..." : "Mark All Present"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={markAllAbsent}
-            className="h-10 gap-1.5 text-xs text-destructive border-destructive/40 hover:bg-destructive/10"
-            disabled={!subject || !isToday || markingAll}
-            title={!subject ? "Select a subject first" : !isToday ? "Past dates are read-only" : ""}
-          >
-            {markingAbsent ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <UserX className="w-3.5 h-3.5" />
-            )}
-            {markingAbsent ? "Marking..." : "Mark All Absent"}
           </Button>
         </div>
       </div>

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
-import { ArrowLeft, Download, Copy, Check, QrCode, Plus, ImageIcon } from "lucide-react";
+import { ArrowLeft, Download, Copy, Check, QrCode, Plus, ImageIcon, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
@@ -88,6 +88,18 @@ const QRCard = ({ instructor }: { instructor: Instructor }) => {
         ) : (
           <QRCodeSVG value={url} size={180} level="H" />
         )}
+      </div>
+
+      {/* Feedback link */}
+      <div className="rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 space-y-1.5">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Feedback Link</p>
+        <p className="text-[11px] font-mono text-foreground/80 break-all leading-relaxed">{url}</p>
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5 w-full mt-0.5 text-primary hover:text-primary">
+            <ExternalLink className="w-3 h-3" />
+            Open Link
+          </Button>
+        </a>
       </div>
 
       <div className="flex gap-2">
